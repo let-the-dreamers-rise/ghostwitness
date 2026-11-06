@@ -25,10 +25,26 @@ records against that header, downloading candidate references for three distinct
 Writers query `dedupe` scoped to creator before writing. Cross-writer duplicates are allowed and
 readers validate/group them; no claim of protocol uniqueness is made.
 
-Example after replacing placeholders with a real owner and session:
+Query used by recovery, with the demo owner and a real session:
 
 ```text
-app = str('ghostwitness') AND kind = str('upload') AND sid = str('<32-hex-session-id>') AND $owner = addr(0x<40-hex-owner>) ORDER BY $key ASC
+app = str('ghostwitness') AND kind = str('upload') AND sid = str('fa6f49a0fa59f0e6b699bf4bd659b044') AND $owner = addr(0xc89363f084f5a16433d50d5958a40b747ff9a395) ORDER BY $key ASC
 ```
 
-Actual demo writer addresses and entity keys: **pending funded device setup and a live run**.
+## Live entities (Rabdi testnet)
+
+Writers (witness device keys, `$creator`): `0xd071978f76f636f74bbbeb36c625d374160f7a93`,
+`0xc512b28e224972a884d9d02aedb89106d46d6ad5`. Owner of every entity (`$owner`, the recorder's
+MetaMask wallet): `0xc89363f084f5a16433d50d5958a40b747ff9a395`.
+
+| Kind | Entity key |
+|---|---|
+| session | `0x86191b20628043225f71ac48f93e0d539f46a619799b0ecda767cbcd81b37555` |
+| segment (i=0) | `0xf4b22b38b40723d648c9eb93821f0103e4b88e4b4984bb9b61abca1d23be1e50` |
+| upload (i=0, j=0) | `0x9e9626dff353302cc524fc65cdf3e9a7cf409dedf5128006477c4255e796e15a` |
+
+Read one back:
+
+```bash
+curl -s https://rpc.rabdi.db-chain.testnet.arkiv.network -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_getEntity","params":["0x9e9626dff353302cc524fc65cdf3e9a7cf409dedf5128006477c4255e796e15a"]}'
+```

@@ -16,4 +16,5 @@ renewal or an index backup. We do not claim that expiry erases prior public copi
 
 Implementation: `core/arkiv/ArkivCodec.kt`, `app/.../online/ArkivClient.kt`, `UploadEngine.kt`,
 `RecoveryEngine.kt`, `rewards/server.mjs`. See `schema.md` and `../docs/online-flow.md`.
-Live read/write demonstration remains pending deployment and funded writers.
+Live: witness phones wrote session, segment and upload entities on Rabdi during the event (writers
+and keys in `schema.md`), and the recovery screen lists recordings from those entities.

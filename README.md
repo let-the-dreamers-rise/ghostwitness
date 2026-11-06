@@ -23,16 +23,56 @@ See [wallet setup and recovery](docs/wallet-recovery.md) and [upload/reward inst
 required Bee/RPC/funding configuration and remaining live-device validation. Existing design details in
 `docs/spec.md` are superseded by that flow where they describe offline recovery or exclude rewards.
 
-This revision builds locally, but no live upload/recovery/payout is claimed without configured services.
-Arkiv writer addresses are generated per device and displayed in **Online setup**; publish the actual
-funded demo addresses and entity/reference evidence in `arkiv/` after the demo deployment.
+## Live testnet deployment
 
-## CROPS: who learns what
+Run on real Android phones during the event: a recorder, receiving witnesses and a recovery phone.
 
-Censorship resistance, open source, privacy and security, as built in this repo. Media is encrypted on
-the recorder. The recorder, recovering owner device and trusted wallet key service can access content
-key K. MetaMask private keys stay inside the wallet. The service operator can decrypt recordings and
-can block key delivery; wallet ownership alone cannot replace an unavailable service master.
+| What | Where |
+|---|---|
+| Arkiv writer addresses (witness devices) | `0xd071978f76f636f74bbbeb36c625d374160f7a93`, `0xc512b28e224972a884d9d02aedb89106d46d6ad5` |
+| Owner wallet of every entity | `0xc89363f084f5a16433d50d5958a40b747ff9a395` |
+| Arkiv network | Rabdi testnet, chain 7794095, [explorer](https://rabdi.explorer.arkiv.network) |
+| Swarm | Bee 2.8.3 light node on the Swarm Sepolia testnet, postage batch `6cb6a8661a2171c5294f4d059c5ca246ed40937dbfa1a6c5f0c473b455a89b21` |
+| Upload rewards contract | `0x8ea0AC50532B5F35a2bd9CC325144474C171888F` on Base Sepolia ([basescan](https://sepolia.basescan.org/address/0x8ea0AC50532B5F35a2bd9CC325144474C171888F)) |
+
+One query you can run (lists the uploaded shards indexed for the demo owner):
+
+```bash
+curl -s https://rpc.rabdi.db-chain.testnet.arkiv.network -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["app = str('ghostwitness') AND kind = str('upload') AND $owner = addr(0xc89363f084f5a16433d50d5958a40b747ff9a395)",{"limit":"0x14","select":{"key":true,"creator":true,"attributes":true}}]}'
+```
+
+The public RPC has an anonymous query budget per client; if it answers `ANON_COST_LIMITED`, add an
+access key from [hub.arkiv.network](https://hub.arkiv.network) as an `X-API-KEY` header. Evidence and
+entity keys: `arkiv/schema.md` and `arkiv/swarm.md`.
+
+## CROPS
+
+- **C (censorship resistance):** the point of the app. A seized or smashed phone does not stop the
+  recording: encrypted shards already sit on bystanders' phones, then on Swarm, indexed on Arkiv and owned
+  by the victim's wallet. No GhostWitness server is in the recording or upload path; any witness with
+  internet and a Bee endpoint can publish. What we control that users depend on: the wallet key service
+  (needed to unlock a recording on a new phone) and the demo Bee/postage endpoint. If the key service goes
+  away, recordings stay stored and indexed but cannot be decrypted; if our Bee endpoint goes away,
+  witnesses can point at any other Bee node.
+- **O (open source):** MIT licensed (`LICENSE`). Everything needed to build and run it is in this repo:
+  Android app, core crypto library, key service, reward contract and verifier.
+- **P (privacy):** media is AES-GCM encrypted on the recorder before it leaves the phone. Witnesses,
+  Swarm, the Bee operator, the Arkiv RPC and Arkiv readers see ciphertext and metadata only; the table
+  below lists exactly what each learns. Trade-off, stated plainly: the key-service operator can derive
+  owner recovery keys and could decrypt a recording if it also fetched the ciphertext. No trackers or
+  analytics in the app.
+- **S (security):** keys stay on devices. MetaMask keys never leave MetaMask (only `personal_sign`);
+  device writer keys and recovery keys are encrypted with Android Keystore. Every segment is signed and
+  hash-chained, shards are Merkle-committed, and recovery verifies wallet authorization and recorder
+  signatures before trusting any public Arkiv entry. Trust assumptions: the key-service operator and its
+  master secret; the reward verifier for payouts only.
+
+### Who learns what
+
+Media is encrypted on the recorder. The recorder, recovering owner device and trusted wallet key
+service can access content key K. MetaMask private keys stay inside the wallet. The service operator
+can decrypt recordings and can block key delivery; wallet ownership alone cannot replace an unavailable
+service master.
 
 | Party | What it learns | What it never gets |
 |---|---|---|
@@ -54,7 +94,7 @@ Service dependencies:
 Limits, stated plainly: a recording whose shards never reached an online witness cannot be recovered
 remotely; recovery today needs internet (direct witness-to-owner transfer is not built); the index
 expires after about 30 days unless the owner's wallet extends it; Nearby peers and the Bee operator see
-network metadata. The code is open source in this repository.
+network metadata. The code is open source in this repository under the MIT license.
 
 ## Modules
 
