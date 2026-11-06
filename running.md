@@ -44,8 +44,8 @@ Conformance audit against `docs/online-flow.md` (2026-11-06): the code follows t
   `$key > key()`, `ORDER BY $key ASC`); chain id 7794095 confirmed. Read-only check, no writes.
 
 Checks after the audit: `:core:test :core:koverVerify :app:assembleDebug :app:lintDebug` pass;
-core line coverage 99.43%. `rewards/npm test` not re-run (no `node_modules`; rewards code does not
-use the renamed attribute).
+core line coverage 99.43%. `rewards/`: plain `npm ci` now works on Windows and Linux (the lockfile no
+longer lists a macOS-only `fsevents` entry); `npm test` passes 2/2.
 
 ## Status at a glance
 
