@@ -13,6 +13,8 @@ import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import xyz.ghostwitness.app.RecoveryKeyChoice
+import xyz.ghostwitness.app.mesh.MeshStatus
+import xyz.ghostwitness.app.mesh.WitnessMeshDriver
 import xyz.ghostwitness.app.store.SessionStore
 import xyz.ghostwitness.core.capture.Tier
 import xyz.ghostwitness.core.crypto.Bytes
@@ -26,7 +28,8 @@ class SegmentReport(val index: Int, val durMs: Int, val ciphertextBytes: Int, va
 
 /**
  * Camera + mic -> 2 s MP4 segments -> encrypt, RS(5,3), commit, sign -> local shard store (spec section 5).
- * Single use: build, [start], [stop]. Threads: "gw-capture" runs camera callbacks, the video encoder and the
+ * Sealed segments go straight to the mesh ([WitnessMeshDriver]), which keeps spreading after
+ * [stopCapture] until [shutdown]. Single use. Threads: "gw-capture" runs camera callbacks, the video encoder and the
  * muxer; "gw-audio" reads the mic; "gw-seal" owns the session state and does all crypto. Listener calls
  * arrive on the main thread.
  *
@@ -46,6 +49,11 @@ class CapturePipeline(
         fun onSegmentSealed(report: SegmentReport)
 
         fun onPipelineError(message: String)
+
+        fun onMeshStatus(status: MeshStatus)
+
+        /** The capture tier changed; [automatic] is true when the rate controller chose it. */
+        fun onTierApplied(tier: Tier, automatic: Boolean)
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -93,7 +101,23 @@ class CapturePipeline(
     private val video: VideoEncoder = VideoEncoder(spec.size, initialTier.videoBitrate, capture, videoListener)
     private val audio: AudioEncoder = AudioEncoder(clockNanos, audioListener)
 
+    /** Main thread only. False once the user picks a tier by hand. */
+    private var autoTier = true
+    private var captureStopped = false
+
+    private val meshListener: WitnessMeshDriver.Listener = object : WitnessMeshDriver.Listener {
+        override fun onMeshStatus(status: MeshStatus) = listener.onMeshStatus(status)
+
+        override fun onTierDecision(tier: Tier) {
+            if (!autoTier || captureStopped) return
+            applyTier(tier)
+            listener.onTierApplied(tier, automatic = true)
+        }
+    }
+    private val meshDriver: WitnessMeshDriver = WitnessMeshDriver(context, session.header, store, initialTier, meshListener)
+
     fun start() {
+        meshDriver.start()
         capture.post {
             try {
                 video.start()
@@ -105,15 +129,30 @@ class CapturePipeline(
         }
     }
 
+    /** Main thread. Pins the tier; the rate controller's choices are ignored until [setAutoTier]. */
+    fun setManualTier(tier: Tier) {
+        autoTier = false
+        applyTier(tier)
+        listener.onTierApplied(tier, automatic = false)
+    }
+
+    /** Main thread. Lets the rate controller pick the tier again from its next window. */
+    fun setAutoTier() {
+        autoTier = true
+    }
+
     /** Takes effect for video bitrate at once, and for segment layout at the next boundary. */
-    fun setTier(tier: Tier) {
+    private fun applyTier(tier: Tier) {
         capture.post {
             muxer.setTier(tier)
             video.setBitrate(tier.videoBitrate)
         }
     }
 
-    fun stop() {
+    /** Main thread. Stops recording and wipes K; the mesh keeps spreading what was sealed. */
+    fun stopCapture() {
+        if (captureStopped) return
+        captureStopped = true
         capture.post {
             camera.close()
             audio.stop()
@@ -123,6 +162,12 @@ class CapturePipeline(
             sealer.shutdown()
             captureThread.quitSafely()
         }
+    }
+
+    /** Main thread. Stops capture if needed, then the mesh. */
+    fun shutdown() {
+        stopCapture()
+        meshDriver.stop()
     }
 
     private fun newSession(recoveryPublicKey: ByteArray): RecordingSession {
@@ -141,6 +186,7 @@ class CapturePipeline(
             val appended = session.append(tStartMs, durMs, plain.bytes)
             session = appended.session
             store.writeSegment(appended.segment, appended.root)
+            meshDriver.onSealed(appended)
             val check = debugDir?.let { selfCheck(appended, plain.bytes, it) }
             val entry = appended.segment.entry
             val report = SegmentReport(entry.index, durMs, entry.ctLen, plain.withVideo, check)

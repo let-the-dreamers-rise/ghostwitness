@@ -22,9 +22,11 @@ class SessionStore(root: File, header: SessionHeader) {
         writeAtomically(File(dir, "header.bin"), header.encode())
     }
 
+    fun shardFile(segmentIndex: Int, shardIndex: Int): File = File(shards, "$segmentIndex-$shardIndex.bin")
+
     fun writeSegment(segment: EncodedSegment, root: SignedRoot) {
         val index = segment.entry.index
-        segment.shards.forEachIndexed { j, shard -> writeAtomically(File(shards, "$index-$j.bin"), shard) }
+        segment.shards.forEachIndexed { j, shard -> writeAtomically(shardFile(index, j), shard) }
         writeAtomically(File(entries, "$index.bin"), segment.entry.encode())
         writeAtomically(File(dir, "root.bin"), root.encode())
     }

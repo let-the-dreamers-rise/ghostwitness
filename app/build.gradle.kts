@@ -46,4 +46,5 @@ kotlin {
 
 dependencies {
     implementation(project(":core"))
+    implementation("com.google.android.gms:play-services-nearby:19.3.0")
 }
