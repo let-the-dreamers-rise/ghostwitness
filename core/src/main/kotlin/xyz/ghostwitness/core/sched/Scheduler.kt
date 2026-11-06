@@ -24,6 +24,9 @@ class Scheduler(private val config: SchedulerConfig = SchedulerConfig()) {
         return state.withPeer(peer)
     }
 
+    /** Forgets a disconnected peer. Its in-flight sends are released by the next [expire]; its ACKed shards still count. */
+    fun removePeer(state: SchedulerState, peerId: String): SchedulerState = state.copy(peers = state.peers - peerId)
+
     fun expire(state: SchedulerState, nowMs: Long): SchedulerState =
         state.segments.fold(state) { acc, segment ->
             segment.slots.fold(acc) { inner, slot -> if (shouldExpire(inner, slot, nowMs)) release(inner, segment.index, slot) else inner }
