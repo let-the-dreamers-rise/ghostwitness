@@ -1,6 +1,7 @@
 package xyz.ghostwitness.core.mesh
 
 import xyz.ghostwitness.core.capture.RateController
+import xyz.ghostwitness.core.capture.RateInput
 import xyz.ghostwitness.core.capture.RateState
 import xyz.ghostwitness.core.capture.Tier
 import xyz.ghostwitness.core.crypto.Bytes
@@ -174,13 +175,12 @@ class WitnessMesh(
 
     private fun rateWindow(state: WitnessState, nowMs: Long): Pair<WitnessState, List<MeshCommand>> {
         if (nowMs - state.windowStartMs < config.rateWindowMs) return state to emptyList()
-        // Alone, nothing can be sent anyway: keep the tier rather than throw video away.
-        if (state.links.isEmpty()) return state.copy(windowStartMs = nowMs) to emptyList()
         val goodput = state.links.values.sumOf { it.goodputBytesPerSec }
         val backlog = state.scheduler.segments.count { progress.status(it) == SegmentStatus.SENDING }
         // Trust measured goodput too, in case the bandwidth callback never reports the upgrade.
         val bulkLaneUp = state.links.values.any { it.quality.carriesVideo || (it.samples > 0 && it.goodputBytesPerSec >= BULK_BYTES_PER_SEC) }
-        val next = rates.onWindow(state.rate, goodput, backlog, bulkLaneUp)
+        // No holders: audio only (LOCAL_ONLY), so the backlog stays small enough to drain when one appears.
+        val next = rates.onWindow(state.rate, RateInput(goodput, backlog, bulkLaneUp, holders = state.links.size))
         val commands = if (next.tier != state.rate.tier) listOf(MeshCommand.SetTier(next.tier)) else emptyList()
         return state.copy(rate = next, windowStartMs = nowMs) to commands
     }

@@ -6,6 +6,7 @@ import android.os.HandlerThread
 import android.os.Looper
 import android.os.SystemClock
 import xyz.ghostwitness.app.store.SessionStore
+import xyz.ghostwitness.core.capture.RateController
 import xyz.ghostwitness.core.capture.Tier
 import xyz.ghostwitness.core.crypto.Bytes
 import xyz.ghostwitness.core.mesh.ControlCodec
@@ -32,6 +33,8 @@ data class MeshStatus(
     val fullySpread: Int,
     val okToLosePhone: Boolean,
     val spare: Int,
+    /** Fewest distinct holders across finished segments; 1 means a single point of failure. */
+    val minHolders: Int,
     val suggestedTier: Tier,
     val lastError: String?,
 )
@@ -39,12 +42,17 @@ data class MeshStatus(
 /**
  * Runs [WitnessMesh] on its own thread ("gw-mesh") and turns its commands into Nearby sends. Ticks every
  * 250 ms. Listener calls arrive on the main thread.
+ *
+ * The mesh sees each holder by its advertised name, not its Nearby endpoint id. Endpoint ids change on
+ * every reconnect; counting a returning holder as a new one would overstate how many holders a segment
+ * has and so how many losses it tolerates.
  */
 class WitnessMeshDriver(
     context: Context,
     private val header: SessionHeader,
     private val store: SessionStore,
     initialTier: Tier,
+    ladder: List<Tier>,
     private val listener: Listener,
 ) {
     interface Listener {
@@ -56,32 +64,47 @@ class WitnessMeshDriver(
     private val main = Handler(Looper.getMainLooper())
     private val thread = HandlerThread("gw-mesh").apply { start() }
     private val handler = Handler(thread.looper)
-    private val mesh = WitnessMesh(header)
+    private val mesh = WitnessMesh(header, rates = RateController(ladder))
     private var state: WitnessState = mesh.initial(initialTier, SystemClock.elapsedRealtime())
     private var lastError: String? = null
     private var lastStatusMs = 0L
     private var stopped = false
 
+    /** Holder name to its current endpoint, and back. Handler thread only. */
+    private var endpointOf: Map<String, String> = emptyMap()
+    private var holderOf: Map<String, String> = emptyMap()
+
     private val events = object : NearbyLink.Events {
-        override fun onConnected(endpointId: String, name: String) =
-            applyStep(mesh.onPeerConnected(state, endpointId, LinkQuality.MEDIUM, now()))
+        override fun onConnected(endpointId: String, name: String) {
+            endpointOf[name]?.let { old -> holderOf = holderOf - old }
+            endpointOf = endpointOf + (name to endpointId)
+            holderOf = holderOf + (endpointId to name)
+            applyStep(mesh.onPeerConnected(state, name, LinkQuality.MEDIUM, now()))
+        }
 
         override fun onDisconnected(endpointId: String) {
-            state = mesh.onPeerLost(state, endpointId)
+            val holder = holderOf[endpointId] ?: return
+            holderOf = holderOf - endpointId
+            // A holder that already reconnected under a new endpoint stays connected.
+            if (endpointOf[holder] != endpointId) return
+            endpointOf = endpointOf - holder
+            state = mesh.onPeerLost(state, holder)
         }
 
         override fun onQuality(endpointId: String, quality: LinkQuality) {
-            state = mesh.onPeerQuality(state, endpointId, quality, now())
+            val holder = holderOf[endpointId] ?: return
+            state = mesh.onPeerQuality(state, holder, quality, now())
         }
 
         override fun onBytes(endpointId: String, bytes: ByteArray) {
+            val holder = holderOf[endpointId] ?: return
             val frame = try {
                 ControlCodec.decode(bytes)
             } catch (e: FrameFormatException) {
-                lastError = "bad frame from $endpointId: ${e.message}"
+                lastError = "bad frame from $holder: ${e.message}"
                 return
             }
-            if (frame is ControlFrame.Ack) state = mesh.onAck(state, endpointId, frame.frame, now())
+            if (frame is ControlFrame.Ack) state = mesh.onAck(state, holder, frame.frame, now())
         }
 
         override fun onFile(endpointId: String, payloadId: Long, bytes: ByteArray) {
@@ -135,7 +158,7 @@ class WitnessMeshDriver(
         state = step.state
         step.commands.forEach { command ->
             when (command) {
-                is MeshCommand.SendControl -> link.sendBytes(command.peerId, command.frame)
+                is MeshCommand.SendControl -> endpointOf[command.peerId]?.let { link.sendBytes(it, command.frame) }
                 is MeshCommand.SendShard -> sendShard(command)
                 is MeshCommand.SetTier -> main.post { listener.onTierDecision(command.tier) }
             }
@@ -144,10 +167,11 @@ class WitnessMeshDriver(
 
     private fun sendShard(command: MeshCommand.SendShard) {
         val entry = state.entries[command.segmentIndex] ?: return
+        val endpoint = endpointOf[command.peerId] ?: return
         val file = store.shardFile(command.segmentIndex, command.shardIndex)
         val shardLen = file.length().toInt()
         val shardRoot = entry.shardRoots[command.shardIndex]
-        link.sendFile(command.peerId, file) { payloadId ->
+        link.sendFile(endpoint, file) { payloadId ->
             ShardHeader(
                 sessionId = header.sessionId,
                 segmentIndex = command.segmentIndex,
@@ -176,6 +200,7 @@ class WitnessMeshDriver(
             fullySpread = segments.count { progress.status(it) == SegmentStatus.FULLY_SPREAD },
             okToLosePhone = progress.okToLosePhone(state.scheduler),
             spare = progress.minimumSpare(state.scheduler),
+            minHolders = segments.minOfOrNull { progress.holderCount(it) } ?: 0,
             suggestedTier = state.rate.tier,
             lastError = lastError,
         )

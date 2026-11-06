@@ -29,6 +29,15 @@ data class SegmentSlots(val index: Int, val slots: List<ShardSlot>) {
 
     /** Peers that already hold or are receiving a shard of this segment. */
     val holders: Set<String> get() = slots.filter { it.status != SlotStatus.PENDING }.mapNotNull { it.peerId }.toSet()
+
+    /** Shards each peer holds or is receiving for this segment. */
+    val committedPerPeer: Map<String, Int>
+        get() = slots.filter { it.status != SlotStatus.PENDING }.mapNotNull { it.peerId }.groupingBy { it }.eachCount()
+
+    /** ACKed shards per peer, largest first. */
+    val ackedPerPeer: List<Int>
+        get() = slots.filter { it.status == SlotStatus.ACKED }.mapNotNull { it.peerId }
+            .groupingBy { it }.eachCount().values.sortedDescending()
 }
 
 data class Peer(

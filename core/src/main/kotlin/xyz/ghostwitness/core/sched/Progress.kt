@@ -10,8 +10,25 @@ class Progress(private val config: SchedulerConfig = SchedulerConfig()) {
         else -> SegmentStatus.SENDING
     }
 
-    /** How many more holders of this segment can be lost before it becomes unrecoverable. */
-    fun spare(segment: SegmentSlots): Int = maxOf(0, segment.ackedCount - config.dataShards)
+    /**
+     * How many holders of this segment can be lost, worst case, while it stays recoverable. Counts holders,
+     * not shards: if one holder has 2 of 3 ACKed shards, losing it loses both. 0 when not yet recoverable.
+     */
+    fun spare(segment: SegmentSlots): Int {
+        val perHolder = segment.ackedPerPeer
+        var remaining = perHolder.sum()
+        if (remaining < config.dataShards) return 0
+        var lost = 0
+        for (count in perHolder) {
+            if (remaining - count < config.dataShards) break
+            remaining -= count
+            lost++
+        }
+        return lost
+    }
+
+    /** Distinct holders with at least one ACKed shard of this segment. */
+    fun holderCount(segment: SegmentSlots): Int = segment.ackedPerPeer.size
 
     /** Highest segment index such that it and every earlier segment are recoverable; -1 if none. */
     fun recoverableUpTo(state: SchedulerState): Int =

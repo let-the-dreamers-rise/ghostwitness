@@ -117,6 +117,32 @@ class SegmentPlannerTest {
     }
 
     @Test
+    fun `a size change keeps the open segment on the old encoder and cuts over on the new one`() {
+        val planner = SegmentPlanner()
+        val ready = planner.onFormat(planner.onFormat(PlannerState(Tier.V1), Track.AUDIO), Track.VIDEO, generation = 0)
+        val first = planner.onSample(ready, Sample(Track.VIDEO, 0, true, generation = 0))
+        val open = first.actions.filterIsInstance<MuxAction.Open>().single()
+        assertEquals(MuxAction.Open(0, true, 0, Tier.V1, 0), open)
+        // The pipeline starts a 240p encoder (generation 1) next to the 480p one.
+        val switched = planner.onFormat(planner.setTier(first.state, Tier.V0), Track.VIDEO, generation = 1)
+        assertEquals(1, switched.newestVideo)
+        val newEarly = planner.onSample(switched, Sample(Track.VIDEO, 500_000, true, generation = 1))
+        assertEquals(listOf<MuxAction>(MuxAction.Drop), newEarly.actions)
+        val oldFrame = planner.onSample(newEarly.state, Sample(Track.VIDEO, 533_000, false, generation = 0))
+        assertEquals(listOf<MuxAction>(MuxAction.Write), oldFrame.actions)
+        val oldKey = planner.onSample(oldFrame.state, Sample(Track.VIDEO, 1_980_000, true, generation = 0))
+        assertTrue(oldKey.actions.none { it is MuxAction.Close }, "an old-generation keyframe must not start the next segment")
+        val cut = planner.onSample(oldKey.state, Sample(Track.VIDEO, 2_000_000, true, generation = 1))
+        assertEquals(MuxAction.Close(0, true, 0, 2_000_000), cut.actions[0])
+        assertEquals(MuxAction.Open(1, true, 2_000_000, Tier.V0, 1), cut.actions[1])
+        val stale = planner.onSample(cut.state, Sample(Track.VIDEO, 2_010_000, false, generation = 0))
+        assertEquals(listOf<MuxAction>(MuxAction.Drop), stale.actions)
+        val audioOnly = planner.onSample(planner.setTier(stale.state, Tier.A), Sample(Track.AUDIO, 4_000_000, true))
+        assertEquals(MuxAction.Open(2, false, 4_000_000, Tier.A, null), audioOnly.actions[1])
+        assertEquals(1, planner.onFormat(audioOnly.state, Track.VIDEO, generation = 0).newestVideo)
+    }
+
+    @Test
     fun `invalid timings are rejected`() {
         assertFailsWith<IllegalArgumentException> { SegmentPlanner(syncLeadUs = 100_000, toleranceUs = 50_000) }
         assertFailsWith<IllegalArgumentException> { SegmentPlanner(targetUs = 40_000) }

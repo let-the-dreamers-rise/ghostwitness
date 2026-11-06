@@ -24,6 +24,8 @@ class SegmentMuxer(
     private val orientationHint: Int,
     initialTier: Tier,
     private val requestSync: () -> Unit,
+    /** A segment started; the caller applies its tier's frame rate and bitrate and retires old encoders. */
+    private val onOpened: (MuxAction.Open) -> Unit,
     private val onSegment: (PlainSegment) -> Unit,
     private val onError: (String) -> Unit,
 ) {
@@ -31,14 +33,14 @@ class SegmentMuxer(
 
     private val planner = SegmentPlanner()
     private var state = PlannerState(initialTier)
-    private var videoFormat: MediaFormat? = null
+    private var videoFormats: Map<Int, MediaFormat> = emptyMap()
     private var audioFormat: MediaFormat? = null
     private var current: OpenFile? = null
     private var finished = false
 
-    fun onVideoFormat(format: MediaFormat) {
-        videoFormat = format
-        state = planner.onFormat(state, Track.VIDEO)
+    fun onVideoFormat(generation: Int, format: MediaFormat) {
+        videoFormats = videoFormats.filterKeys { it >= generation - KEPT_GENERATIONS } + (generation to format)
+        state = planner.onFormat(state, Track.VIDEO, generation)
     }
 
     fun onAudioFormat(format: MediaFormat) {
@@ -50,9 +52,9 @@ class SegmentMuxer(
         state = planner.setTier(state, tier)
     }
 
-    fun onVideoSample(buffer: ByteBuffer, info: MediaCodec.BufferInfo) {
+    fun onVideoSample(generation: Int, buffer: ByteBuffer, info: MediaCodec.BufferInfo) {
         val isKey = (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
-        handle(Sample(Track.VIDEO, info.presentationTimeUs, isKey), buffer, info)
+        handle(Sample(Track.VIDEO, info.presentationTimeUs, isKey, generation), buffer, info)
     }
 
     fun onAudioSample(bytes: ByteArray, ptsUs: Long) {
@@ -78,7 +80,10 @@ class SegmentMuxer(
 
     private fun perform(action: MuxAction, track: Track?, buffer: ByteBuffer?, info: MediaCodec.BufferInfo?) {
         when (action) {
-            is MuxAction.Open -> current = openFile(action)
+            is MuxAction.Open -> {
+                current = openFile(action)
+                onOpened(action)
+            }
             is MuxAction.Close -> closeFile(action)
             MuxAction.Write -> if (track != null && buffer != null && info != null) write(track, buffer, info)
             MuxAction.RequestSync -> requestSync()
@@ -91,7 +96,11 @@ class SegmentMuxer(
         return try {
             val muxer = MediaMuxer(sink.fd, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             muxer.setOrientationHint(orientationHint)
-            val videoTrack = if (action.withVideo) muxer.addTrack(checkNotNull(videoFormat)) else NO_TRACK
+            val videoTrack = if (action.withVideo) {
+                muxer.addTrack(checkNotNull(videoFormats[action.videoGeneration]) { "no format for encoder ${action.videoGeneration}" })
+            } else {
+                NO_TRACK
+            }
             val audioTrack = muxer.addTrack(checkNotNull(audioFormat))
             muxer.start()
             OpenFile(muxer, sink, videoTrack, audioTrack)
@@ -138,5 +147,8 @@ class SegmentMuxer(
 
     private companion object {
         const val NO_TRACK = -1
+
+        /** Formats of older encoders kept around; only the open segment's and the newest are ever used. */
+        const val KEPT_GENERATIONS = 4
     }
 }

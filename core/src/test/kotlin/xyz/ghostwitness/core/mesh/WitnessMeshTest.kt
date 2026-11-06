@@ -79,7 +79,8 @@ class WitnessMeshTest {
         val acked = (0..2).fold(sent.state) { acc, j -> mesh.onAck(acc, byShard.getValue(j), recorded.ackFrame(0 to j), 400) }
         assertEquals(SegmentStatus.RECOVERABLE, mesh.progress.status(acked.scheduler.segment(0)!!))
         assertTrue(mesh.progress.okToLosePhone(acked.scheduler))
-        assertEquals(emptyMap(), acked.sentAtMs)
+        // Three holders take the two parity shards as second shards; those are still in flight.
+        assertEquals(setOf(0 to 3, 0 to 4), acked.sentAtMs.keys)
     }
 
     @Test
@@ -88,12 +89,12 @@ class WitnessMeshTest {
         val sent = mesh.onTick(state, 0)
         val byPeer = shards(sent.commands).associate { it.peerId to it.shardIndex }
         val afterFast = mesh.onAck(sent.state, "fast", recorded.ackFrame(0 to byPeer.getValue("fast")), 50)
-        val afterBoth = mesh.onAck(afterFast, "slow", recorded.ackFrame(0 to byPeer.getValue("slow")), 5_000)
+        val afterBoth = mesh.onAck(afterFast, "slow", recorded.ackFrame(0 to byPeer.getValue("slow")), 4_000)
         val fast = afterBoth.links.getValue("fast")
         val slow = afterBoth.links.getValue("slow")
         assertEquals(1, fast.samples)
         assertTrue(fast.goodputBytesPerSec > slow.goodputBytesPerSec * 10)
-        val next = mesh.onTick(seal(afterBoth, 1), 5_100)
+        val next = mesh.onTick(seal(afterBoth, 1), 4_100)
         assertEquals(MeshCommand.SendShard("fast", 1, 0), shards(next.commands).first())
     }
 
@@ -119,14 +120,14 @@ class WitnessMeshTest {
     }
 
     @Test
-    fun `alone the tier is kept and with fast peers it climbs after clean windows`() {
+    fun `no holders means audio only, and three fast holders climb to the three-holder cap`() {
         val alone = mesh.onTick(mesh.initial(Tier.V0, 0), 2_000)
-        assertEquals(Tier.V0, alone.state.rate.tier)
+        assertEquals(Tier.A, alone.state.rate.tier)
         val peers = listOf("a", "b", "c").map { it to LinkQuality.HIGH }.toTypedArray()
-        val start = connect(mesh.initial(Tier.V0, 0), *peers)
+        val start = connect(mesh.initial(Tier.V0_10, 0), *peers)
         val climbed = (1..3).fold(start) { acc, w -> mesh.onTick(acc, w * 2_000L).state }
-        assertEquals(Tier.V1, climbed.rate.tier)
-        assertEquals(Tier.V1, mesh.initial(Tier.V2, 0).rate.tier)
+        assertEquals(Tier.V1_24, climbed.rate.tier)
+        assertEquals(Tier.V2, mesh.initial(Tier.V2, 0).rate.tier)
     }
 
     @Test

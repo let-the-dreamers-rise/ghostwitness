@@ -163,7 +163,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CapturePipeline.Listene
             text = "Auto"
             setOnClickListener { selectAuto() }
         }.also(::add)
-        tierButtons = TIERS.associateWith { t ->
+        val offered = spec?.tiers.orEmpty()
+        tierButtons = TIERS.filter { it in offered }.associateWith { t ->
             Button(this).apply {
                 text = t.name
                 setOnClickListener { selectTier(t) }
@@ -173,16 +174,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CapturePipeline.Listene
     }
 
     private fun buildPreview(cameraSpec: CameraSpec): SurfaceView = SurfaceView(this).apply {
-        holder.setFixedSize(cameraSpec.size.width, cameraSpec.size.height)
+        holder.setFixedSize(cameraSpec.previewSize.width, cameraSpec.previewSize.height)
         holder.addCallback(this@MainActivity)
     }
 
     /** Portrait preview of a landscape sensor, capped at half the screen. */
     private fun previewParams(cameraSpec: CameraSpec): LinearLayout.LayoutParams {
         val metrics = resources.displayMetrics
-        val natural = metrics.widthPixels * cameraSpec.size.width / cameraSpec.size.height
+        val size = cameraSpec.previewSize
+        val natural = metrics.widthPixels * size.width / size.height
         val height = minOf(natural, metrics.heightPixels / 2)
-        val width = height * cameraSpec.size.height / cameraSpec.size.width
+        val width = height * size.height / size.width
         return LinearLayout.LayoutParams(width, height).apply { gravity = Gravity.CENTER_HORIZONTAL }
     }
 
@@ -265,11 +267,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CapturePipeline.Listene
         val (text, color) = when {
             pipeline == null -> "Not recording" to Color.DKGRAY
             mesh == null || mesh.sealed == 0 -> "Starting..." to Color.DKGRAY
-            mesh.okToLosePhone -> "OK TO LOSE PHONE  (spare ${mesh.spare})" to SAFE_GREEN
+            mesh.peers == 0 && !mesh.okToLosePhone -> "LOCAL ONLY: no holders, audio only" to UNSAFE_RED
+            mesh.okToLosePhone -> "OK TO LOSE PHONE  (${survives(mesh)})" to SAFE_GREEN
             else -> "NOT SAFE YET" to UNSAFE_RED
         }
         banner.text = text
         banner.setBackgroundColor(color)
+    }
+
+    /** Fault tolerance in holders, not shards: 2 holders with 5 shards between them tolerate 0 losses. */
+    private fun survives(mesh: MeshStatus): String = when {
+        mesh.minHolders <= 1 -> "single holder, tolerates 0 holder losses"
+        else -> "tolerates ${mesh.spare} holder loss${if (mesh.spare == 1) "" else "es"}"
     }
 
     private fun statusLines(): List<String> = buildList {
@@ -281,7 +290,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CapturePipeline.Listene
                 else -> "Idle"
             },
         )
-        add("Tier ${tier.name} (${if (autoTier) "auto" else "manual"}), ${tier.videoBitrate / 1000} kbps video")
+        val picture = tier.video?.let { "${it.width}x${it.height}@${it.fps}, ${tier.videoBitrate / 1000} kbps" } ?: "audio only"
+        add("Tier ${tier.name} (${if (autoTier) "auto" else "manual"}): $picture")
         add("Sealed: ${state.segments} segments (${state.audioOnlySegments} audio only), ${state.totalBytes / 1024} KiB")
         if (state.segments > 0) add("Last: ${state.lastDurMs} ms, ${state.lastBytes / 1024} KiB")
         if (mesh != null) {
@@ -299,7 +309,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CapturePipeline.Listene
     }
 
     private companion object {
-        val TIERS = listOf(Tier.V1, Tier.V0, Tier.A)
+        /** Manual picks; Auto can also choose the in-between frame rates. */
+        val TIERS = listOf(Tier.V2, Tier.V1, Tier.V0, Tier.A)
         const val REQUEST_PERMISSIONS = 1
         const val PADDING = 24
         const val DIMMED = 0.45f

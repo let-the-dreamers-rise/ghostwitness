@@ -13,6 +13,7 @@ import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import xyz.ghostwitness.app.RecoveryKeyChoice
+import xyz.ghostwitness.app.capture.gl.CameraRenderer
 import xyz.ghostwitness.app.mesh.MeshStatus
 import xyz.ghostwitness.app.mesh.WitnessMeshDriver
 import xyz.ghostwitness.app.store.SessionStore
@@ -20,6 +21,8 @@ import xyz.ghostwitness.core.capture.Tier
 import xyz.ghostwitness.core.crypto.Bytes
 import xyz.ghostwitness.core.crypto.SessionSecrets
 import xyz.ghostwitness.core.crypto.SessionSigner
+import xyz.ghostwitness.core.media.Mp4FormatException
+import xyz.ghostwitness.core.media.Mp4Scrubber
 import xyz.ghostwitness.core.session.RecordingSession
 import xyz.ghostwitness.core.session.SegmentAppended
 
@@ -27,11 +30,12 @@ import xyz.ghostwitness.core.session.SegmentAppended
 class SegmentReport(val index: Int, val durMs: Int, val ciphertextBytes: Int, val withVideo: Boolean, val selfCheck: String?)
 
 /**
- * Camera + mic -> 2 s MP4 segments -> encrypt, RS(5,3), commit, sign -> local shard store (spec section 5).
- * Sealed segments go straight to the mesh ([WitnessMeshDriver]), which keeps spreading after
- * [stopCapture] until [shutdown]. Single use. Threads: "gw-capture" runs camera callbacks, the video encoder and the
- * muxer; "gw-audio" reads the mic; "gw-seal" owns the session state and does all crypto. Listener calls
- * arrive on the main thread.
+ * Camera -> GL scaler -> H.264 at the tier's size and frame rate, + mic -> 2 s MP4 segments -> metadata
+ * scrub -> encrypt, RS(5,3), commit, sign -> local shard store (spec section 5). Sealed segments go
+ * straight to the mesh ([WitnessMeshDriver]), which keeps spreading after [stopCapture] until [shutdown].
+ * Single use. Threads: "gw-capture" runs camera callbacks, the video encoders and the muxer; "gw-gl" draws
+ * camera frames into the encoders; "gw-audio" reads the mic; "gw-seal" owns the session state and does
+ * all crypto. Listener calls arrive on the main thread.
  *
  * [debugDir], when set, rebuilds every segment from shards 1, 3 and 4 and saves the result there as a
  * playable MP4. That is plaintext on disk, so it exists only to verify the pipeline on a test phone.
@@ -70,9 +74,10 @@ class CapturePipeline(
     val sessionIdHex: String = Bytes.toHex(session.header.sessionId)
 
     private val videoListener: VideoEncoder.Listener = object : VideoEncoder.Listener {
-        override fun onVideoFormat(format: MediaFormat) = muxer.onVideoFormat(format)
+        override fun onVideoFormat(generation: Int, format: MediaFormat) = muxer.onVideoFormat(generation, format)
 
-        override fun onVideoSample(buffer: ByteBuffer, info: MediaCodec.BufferInfo) = muxer.onVideoSample(buffer, info)
+        override fun onVideoSample(generation: Int, buffer: ByteBuffer, info: MediaCodec.BufferInfo) =
+            muxer.onVideoSample(generation, buffer, info)
 
         override fun onVideoError(message: String) = reportError(message)
     }
@@ -89,20 +94,25 @@ class CapturePipeline(
         override fun onAudioError(message: String) = reportError(message)
     }
 
+    private val startTier: Tier = spec.tiers.firstOrNull { it.ordinal >= initialTier.ordinal } ?: Tier.A
     private val camera: CameraSource = CameraSource(context.applicationContext, capture, ::reportError)
+    private val renderer = CameraRenderer(spec.streamSize, ::reportError)
     private val muxer: SegmentMuxer = SegmentMuxer(
         cacheDir = context.cacheDir,
         orientationHint = spec.sensorOrientation,
-        initialTier = initialTier,
+        initialTier = startTier,
         requestSync = { video.requestSyncFrame() },
+        onOpened = { video.onOpened(it) },
         onSegment = { plain -> sealer.execute { seal(plain) } },
         onError = ::reportError,
     )
-    private val video: VideoEncoder = VideoEncoder(spec.size, initialTier.videoBitrate, capture, videoListener)
+    private val video = VideoChain(capture, renderer, videoListener, ::reportError)
     private val audio: AudioEncoder = AudioEncoder(clockNanos, audioListener)
 
     /** Main thread only. False once the user picks a tier by hand. */
     private var autoTier = true
+    /** Written on the main thread, read on the capture thread too. */
+    @Volatile
     private var captureStopped = false
 
     private val meshListener: WitnessMeshDriver.Listener = object : WitnessMeshDriver.Listener {
@@ -114,14 +124,19 @@ class CapturePipeline(
             listener.onTierApplied(tier, automatic = true)
         }
     }
-    private val meshDriver: WitnessMeshDriver = WitnessMeshDriver(context, session.header, store, initialTier, meshListener)
+    private val meshDriver: WitnessMeshDriver =
+        WitnessMeshDriver(context, session.header, store, startTier, spec.tiers, meshListener)
 
     fun start() {
         meshDriver.start()
         capture.post {
             try {
-                video.start()
-                camera.open(spec, listOfNotNull(video.inputSurface, previewSurface))
+                renderer.start { cameraSurface ->
+                    capture.post { if (!captureStopped) camera.open(spec, listOfNotNull(cameraSurface, previewSurface)) }
+                }
+                val first = startTier.video ?: spec.tiers.lastOrNull { it.hasVideo }?.video
+                    ?: throw IllegalStateException("this phone offers no video tier")
+                video.begin(first, startTier.videoBitrate)
                 audio.start()
             } catch (e: IllegalStateException) {
                 reportError("could not start capture: ${e.message}")
@@ -141,11 +156,13 @@ class CapturePipeline(
         autoTier = true
     }
 
-    /** Takes effect for video bitrate at once, and for segment layout at the next boundary. */
+    /** Bitrate changes at once; size, frame rate and audio-only take effect at the next boundary. */
     private fun applyTier(tier: Tier) {
+        val supported = spec.tiers.firstOrNull { it.ordinal >= tier.ordinal } ?: Tier.A
         capture.post {
-            muxer.setTier(tier)
-            video.setBitrate(tier.videoBitrate)
+            if (captureStopped) return@post
+            muxer.setTier(supported)
+            video.onTier(supported)
         }
     }
 
@@ -157,10 +174,11 @@ class CapturePipeline(
             camera.close()
             audio.stop()
             muxer.finish()
-            video.stop()
-            sealer.execute { session.close() }
-            sealer.shutdown()
-            captureThread.quitSafely()
+            video.stop {
+                renderer.release { capture.post { captureThread.quitSafely() } }
+                sealer.execute { session.close() }
+                sealer.shutdown()
+            }
         }
     }
 
@@ -180,14 +198,15 @@ class CapturePipeline(
     }
 
     private fun seal(plain: PlainSegment) {
+        val clean = scrubbed(plain.bytes)
         try {
             val durMs = ((plain.endPtsUs - plain.startPtsUs) / US_PER_MS).coerceIn(0L, MAX_DUR_MS).toInt()
             val tStartMs = startWallMs + (plain.startPtsUs - ptsOriginUs) / US_PER_MS
-            val appended = session.append(tStartMs, durMs, plain.bytes)
+            val appended = session.append(tStartMs, durMs, clean)
             session = appended.session
             store.writeSegment(appended.segment, appended.root)
             meshDriver.onSealed(appended)
-            val check = debugDir?.let { selfCheck(appended, plain.bytes, it) }
+            val check = debugDir?.let { selfCheck(appended, clean, it) }
             val entry = appended.segment.entry
             val report = SegmentReport(entry.index, durMs, entry.ctLen, plain.withVideo, check)
             main.post { listener.onSegmentSealed(report) }
@@ -195,7 +214,19 @@ class CapturePipeline(
             reportError("sealing failed: ${e.message}")
         } finally {
             plain.bytes.fill(0)
+            clean.fill(0)
         }
+    }
+
+    /**
+     * Location, OS strings and creation times out before encryption. If the MP4 cannot be parsed the
+     * segment is still sealed as it is (losing evidence is worse), and the error is shown.
+     */
+    private fun scrubbed(mp4: ByteArray): ByteArray = try {
+        Mp4Scrubber.scrub(mp4)
+    } catch (e: Mp4FormatException) {
+        reportError("metadata not removed: ${e.message}")
+        mp4.copyOf()
     }
 
     private fun selfCheck(appended: SegmentAppended, plaintext: ByteArray, dir: File): String {

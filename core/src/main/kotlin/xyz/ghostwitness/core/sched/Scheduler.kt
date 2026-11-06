@@ -7,7 +7,10 @@ package xyz.ghostwitness.core.sched
  * - Pass 1 brings every segment to `dataShards` committed shards, lowest shard index (data) first.
  *   That makes a segment recoverable after 1.0x its size of egress instead of 1.67x.
  * - Pass 2 fills the remaining (parity) slots.
- * - Each shard goes to the fastest live peer with spare capacity that holds no other shard of the segment.
+ * - Each shard goes to the live peer with spare capacity that holds the fewest shards of the segment,
+ *   fastest first. With at least `totalShards` live peers that means one shard per peer. With fewer, a
+ *   peer may take up to `ceil(totalShards / livePeers)` shards of a segment, so 1 or 2 holders still
+ *   reach RECOVERABLE (the lower fault tolerance shows in [Progress.spare]).
  * - Timed-out sends and sends to stale peers go back to PENDING and are reassigned.
  */
 class Scheduler(private val config: SchedulerConfig = SchedulerConfig()) {
@@ -60,10 +63,13 @@ class Scheduler(private val config: SchedulerConfig = SchedulerConfig()) {
     private fun assignNext(state: SchedulerState, segmentIndex: Int, nowMs: Long): Pair<Send, SchedulerState>? {
         val segment = state.segment(segmentIndex) ?: return null
         val slot = segment.slots.firstOrNull { it.status == SlotStatus.PENDING } ?: return null
-        val holders = segment.holders
-        val peer = state.peers.values
-            .filter { isLive(it, nowMs) && it.inFlight < config.maxInFlightPerPeer && it.id !in holders }
-            .sortedWith(compareByDescending<Peer> { it.goodputBytesPerSec }.thenBy { it.id })
+        val live = state.peers.values.filter { isLive(it, nowMs) }
+        if (live.isEmpty()) return null
+        val perPeerLimit = (config.totalShards + live.size - 1) / live.size
+        val held = segment.committedPerPeer
+        val peer = live
+            .filter { it.inFlight < config.maxInFlightPerPeer && (held[it.id] ?: 0) < perPeerLimit }
+            .sortedWith(compareBy<Peer> { held[it.id] ?: 0 }.thenByDescending { it.goodputBytesPerSec }.thenBy { it.id })
             .firstOrNull() ?: return null
         val next = state
             .withSlot(segmentIndex, slot.copy(status = SlotStatus.SENT, peerId = peer.id, sentAtMs = nowMs))

@@ -2,12 +2,26 @@ package xyz.ghostwitness.core.capture
 
 enum class Track { VIDEO, AUDIO }
 
-/** One encoded sample as it leaves an encoder. */
-data class Sample(val track: Track, val ptsUs: Long, val isKeyFrame: Boolean)
+/**
+ * One encoded sample as it leaves an encoder. [generation] numbers video encoders: a size change starts a
+ * new encoder (a new generation) next to the old one, and segments switch over at a boundary.
+ */
+data class Sample(val track: Track, val ptsUs: Long, val isKeyFrame: Boolean, val generation: Int = 0)
 
 /** What the muxer must do with the current sample. Actions are applied in list order. */
 sealed interface MuxAction {
-    data class Open(val fileIndex: Int, val withVideo: Boolean, val startPtsUs: Long) : MuxAction
+    /**
+     * Start a new file. [tier] is the tier this segment is recorded at, so the caller applies its frame
+     * rate and bitrate now. [videoGeneration] is the encoder whose samples this file takes, or null when
+     * audio only; every older encoder can be released.
+     */
+    data class Open(
+        val fileIndex: Int,
+        val withVideo: Boolean,
+        val startPtsUs: Long,
+        val tier: Tier = Tier.A,
+        val videoGeneration: Int? = null,
+    ) : MuxAction
 
     data class Close(val fileIndex: Int, val withVideo: Boolean, val startPtsUs: Long, val endPtsUs: Long) : MuxAction
 
@@ -18,12 +32,20 @@ sealed interface MuxAction {
     data object RequestSync : MuxAction
 }
 
-data class OpenSegment(val fileIndex: Int, val withVideo: Boolean, val startPtsUs: Long, val lastPtsUs: Long)
+data class OpenSegment(
+    val fileIndex: Int,
+    val withVideo: Boolean,
+    val startPtsUs: Long,
+    val lastPtsUs: Long,
+    val videoGeneration: Int? = null,
+)
 
 data class PlannerState(
     /** Tier for the next segment; a change takes effect at the next boundary. */
     val tier: Tier,
     val ready: Set<Track> = emptySet(),
+    /** Newest video encoder whose format is known; new video segments start on its keyframes only. */
+    val newestVideo: Int? = null,
     val open: OpenSegment? = null,
     val nextFileIndex: Int = 0,
     val syncRequestedAtUs: Long? = null,
@@ -40,6 +62,8 @@ data class Step(val state: PlannerState, val actions: List<MuxAction>)
  *   a later timestamp and lands inside the tolerance window.
  * - An audio-only segment (tier A) starts on any audio sample once the target length is reached.
  * - Each segment ends exactly where the next one starts, so a tier switch never leaves a gap.
+ * - A size change runs two encoder generations side by side for up to one segment: the open segment keeps
+ *   taking samples from its own generation, and the next segment starts on a keyframe of the newest one.
  */
 class SegmentPlanner(
     private val targetUs: Long = 2_000_000,
@@ -52,7 +76,13 @@ class SegmentPlanner(
         require(targetUs > toleranceUs) { "target must exceed tolerance" }
     }
 
-    fun onFormat(state: PlannerState, track: Track): PlannerState = state.copy(ready = state.ready + track)
+    fun onFormat(state: PlannerState, track: Track, generation: Int = 0): PlannerState = when (track) {
+        Track.AUDIO -> state.copy(ready = state.ready + track)
+        Track.VIDEO -> state.copy(
+            ready = state.ready + track,
+            newestVideo = maxOf(generation, state.newestVideo ?: generation),
+        )
+    }
 
     fun setTier(state: PlannerState, tier: Tier): PlannerState = state.copy(tier = tier)
 
@@ -66,7 +96,7 @@ class SegmentPlanner(
             return Step(started.state, listOf(close) + started.actions)
         }
         val sync = wantsSync(state, sample, elapsed >= targetUs - syncLeadUs)
-        val write = sample.track == Track.AUDIO || open.withVideo
+        val write = sample.track == Track.AUDIO || (open.withVideo && sample.generation == open.videoGeneration)
         val nextOpen = if (write) open.copy(lastPtsUs = maxOf(open.lastPtsUs, sample.ptsUs)) else open
         val actions = listOfNotNull(MuxAction.RequestSync.takeIf { sync }, if (write) MuxAction.Write else MuxAction.Drop)
         val requestedAt = if (sync) sample.ptsUs else state.syncRequestedAtUs
@@ -100,15 +130,18 @@ class SegmentPlanner(
     }
 
     private fun canStartWith(state: PlannerState, sample: Sample): Boolean = if (state.tier.hasVideo) {
-        sample.track == Track.VIDEO && sample.isKeyFrame && state.ready.containsAll(Track.entries)
+        sample.track == Track.VIDEO && sample.isKeyFrame && sample.generation == state.newestVideo &&
+            state.ready.containsAll(Track.entries)
     } else {
         sample.track == Track.AUDIO && Track.AUDIO in state.ready
     }
 
     private fun openWith(state: PlannerState, sample: Sample): Step {
         val withVideo = state.tier.hasVideo
-        val segment = OpenSegment(state.nextFileIndex, withVideo, sample.ptsUs, sample.ptsUs)
+        val generation = if (withVideo) sample.generation else null
+        val segment = OpenSegment(state.nextFileIndex, withVideo, sample.ptsUs, sample.ptsUs, generation)
         val next = state.copy(open = segment, nextFileIndex = state.nextFileIndex + 1, syncRequestedAtUs = null)
-        return Step(next, listOf(MuxAction.Open(segment.fileIndex, withVideo, sample.ptsUs), MuxAction.Write))
+        val open = MuxAction.Open(segment.fileIndex, withVideo, sample.ptsUs, state.tier, generation)
+        return Step(next, listOf(open, MuxAction.Write))
     }
 }
