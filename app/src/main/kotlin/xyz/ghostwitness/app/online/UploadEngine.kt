@@ -25,8 +25,9 @@ class UploadEngine(context: Context) {
                 settingsStatus("A stored contribution failed validation; other files will continue")
             } catch (error: Exception) {
                 retry = true
-                // Do not retain URLs, access keys, private keys or service response bodies in status.
-                settingsStatus("Upload pending: ${error.javaClass.simpleName}")
+                // Do not retain URLs, access keys, private keys or service response bodies in status:
+                // only this app's own OnlineIssue messages are shown.
+                settingsStatus("Upload pending: " + if (error is OnlineIssue) error.message else error.javaClass.simpleName)
                 // One outstanding writer transaction at a time keeps entity-nonce prediction correct.
                 break
             }
@@ -79,7 +80,7 @@ class UploadEngine(context: Context) {
         arkiv.publish(owner, sid, "upload", contribution, common(sid, "upload", contribution) + listOf(
             ArkivCodec.number("i", record.entry.index.toLong()), ArkivCodec.number("j", task.shardIndex.toLong()),
             ArkivCodec.str("ref", reference), ArkivCodec.str("sha256", shardHash), ArkivCodec.str("uploader", uploader),
-            ArkivCodec.str("recordHash", recordHash), ArkivCodec.number("bytes", bytes.size.toLong()),
+            ArkivCodec.str("recordHash", recordHash), ArkivCodec.number("size", bytes.size.toLong()),
             ArkivCodec.bytes("ticket", ticket.encode()),
         ), journal)
         val confirmed = store.journal(journal)

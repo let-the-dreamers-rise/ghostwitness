@@ -22,12 +22,42 @@ This revision builds locally, but no live upload/recovery/payout is claimed with
 Arkiv writer addresses are generated per device and displayed in **Online setup**; publish the actual
 funded demo addresses and entity/reference evidence in `arkiv/` after the demo deployment.
 
+## CROPS: who learns what
+
+Censorship resistance, open source, privacy and security, as built in this repo. The video content, the
+content key K and the owner's recovery private key never leave the recorder (K) or the recovery phone
+(private key). Everyone else sees ciphertext and metadata only.
+
+| Party | What it learns | What it never gets |
+|---|---|---|
+| Nearby receiving witnesses | Encrypted shards they hold; the public session header (salt, session public key, wrapped K); manifest entries (segment times and sizes); the owner's wallet address (in each `GWP` record); their own signed upload assignments | Plaintext, K, the recovery private key |
+| Bee node operator (Swarm) | Uploading witnesses' IP addresses, upload times, ciphertext sizes and references; the recovery phone's IP and which references it reads | Plaintext or K. Shards are encrypted before upload; references are plain 32-byte content addresses with no key inside |
+| Arkiv RPC operator | Callers' IPs and queries (session id, owner wallet), writer transactions | Anything not already public on Arkiv |
+| Anyone reading Arkiv | Owner wallet, session id, segment count, start times and sizes, signed segment records, uploader writer addresses, Swarm references; all sessions owned by the same wallet are linkable | Plaintext, K, recovery keys, which phone recorded |
+| Reward verifier (optional) | Entity keys submitted for claims and the claimant's IP | Plaintext, K |
+| Reward chain, Base Sepolia (optional) | Payouts linking uploader addresses to an owner and session | Plaintext, K |
+
+What runs with no server of ours:
+
+- Recording and spreading shards to nearby witnesses need no internet at all.
+- Uploading and recovery need *an* Arkiv RPC and *a* Bee node, but no GhostWitness service: any
+  Rabdi RPC and any Bee node work, configured per device in Online setup. There is no indexer;
+  recovery queries the Arkiv RPC directly.
+- Only the optional rewards depend on a trusted verifier we run, and evidence uploads never wait for it.
+
+Limits, stated plainly: a recording whose shards never reached an online witness cannot be recovered
+remotely; recovery today needs internet (direct witness-to-owner transfer is not built); the index
+expires after about 30 days unless the owner's wallet extends it; Nearby peers and the Bee operator see
+network metadata. The code is open source in this repository.
+
 ## Modules
 
 | Module | What it is |
 |---|---|
 | `core/` | Pure Kotlin/JVM library: segment encryption with a hash-chained AAD, Reed-Solomon(5,3), Merkle commitments, manifest and signed roots, session header and recording session, wire frames, the data-first transfer scheduler, the segment planner (where 2 s cuts go) and the rate controller |
-| `app/` | Android app (minSdk 29). Camera2 + MediaCodec H.264/AAC into 2 s MP4 segments, sealed straight into shards on the phone. Plaintext segments live in an in-memory file (memfd) on Android 11+ |
+| `app/` | Android app (minSdk 29). Camera2 + MediaCodec H.264/AAC into 2 s MP4 segments, sealed straight into shards on the phone. Plaintext segments live in an in-memory file (memfd) on Android 11+. Witness uploads to Swarm and Arkiv, and owner recovery, are in `online/` |
+| `rewards/` | Optional upload reward pool (Solidity), verifier/relayer and deploy/fund scripts |
+| `arkiv/` | Arkiv schema, integration notes and the submission evidence checklist |
 
 ## Build the app
 

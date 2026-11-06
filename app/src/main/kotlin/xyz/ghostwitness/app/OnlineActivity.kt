@@ -93,11 +93,18 @@ class OnlineActivity : Activity() {
                                 play()
                             }
                         }
-                    } catch (error: Exception) { runOnUiThread { busy = false; status.text = "Recovery failed: ${error.javaClass.simpleName}. Check setup, original key, session code, network and uploaded shard count." } }
+                    } catch (error: Exception) {
+                        // RecoveryEngine's own require/error messages and OnlineIssue never carry secrets or URLs.
+                        val reason = if (error is IllegalArgumentException || error is IllegalStateException || error is xyz.ghostwitness.app.online.OnlineIssue) error.message else error.javaClass.simpleName
+                        runOnUiThread { busy = false; status.text = "Recovery failed: $reason. Check setup, original key, session code, network and uploaded shard count." }
+                    }
                 }
             }
         }
-        button("Refresh upload status") { status.text = OnlineStore(filesDir).summary(); UploadService.schedule(this) }
+        button("Refresh upload status") {
+            status.text = OnlineStore(filesDir).summary() + "\nLast upload run: " + xyz.ghostwitness.app.online.UploadEngine.status
+            UploadService.schedule(this)
+        }
         status = label(OnlineStore(filesDir).summary())
         video = VideoView(this)
         root.addView(video, LinearLayout.LayoutParams(-1, 600))

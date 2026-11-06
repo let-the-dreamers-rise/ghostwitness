@@ -4,6 +4,12 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
+/**
+ * A problem worth showing on screen: the message is written by this app and never contains a URL, access
+ * key, private key or service response body.
+ */
+class OnlineIssue(message: String) : IOException(message)
+
 object Http {
     fun request(url: String, body: ByteArray? = null, headers: Map<String, String> = emptyMap(), maxBytes: Int = 8 * 1024 * 1024): ByteArray {
         val target = URL(url)
@@ -21,7 +27,7 @@ object Http {
                 connection.outputStream.use { it.write(body) }
             }
             val code = connection.responseCode
-            if (code !in 200..299) throw IOException("Remote service returned HTTP $code")
+            if (code !in 200..299) throw OnlineIssue("Remote service returned HTTP $code")
             return connection.inputStream.use { input ->
                 val out = java.io.ByteArrayOutputStream()
                 val buffer = ByteArray(8192)

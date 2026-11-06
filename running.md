@@ -31,6 +31,22 @@ No live Bee node/postage batch, funded Rabdi writers, reward deployment, or real
 yet. Do not report the integrated flow as device/network verified. Submission evidence remains pending
 in `arkiv/`. Existing compile/test results are updated after the final local checks.
 
+Conformance audit against `docs/online-flow.md` (2026-11-06): the code follows the flow. Fixes from it:
+- The Arkiv create + transfer encoding now has an independent viem vector test
+  (`core/src/test/resources/codec-vector.*`, `ArkivCodecTest`).
+- Attribute names are checked against Arkiv's reserved query words; the upload attribute `bytes`
+  (reserved) is now `size`.
+- Setup and RPC failures (wrong chain, unfunded writer, pending writer tx, fee ceiling, HTTP errors)
+  raise `OnlineIssue`: they are retried and their message is shown in upload status and recovery,
+  instead of reading as a corrupt stored file.
+- README has a "CROPS: who learns what" section.
+- The public Rabdi RPC accepts the query forms the app sends (`str()`, `addr()`, `$owner`,
+  `$key > key()`, `ORDER BY $key ASC`); chain id 7794095 confirmed. Read-only check, no writes.
+
+Checks after the audit: `:core:test :core:koverVerify :app:assembleDebug :app:lintDebug` pass;
+core line coverage 99.43%. `rewards/npm test` not re-run (no `node_modules`; rewards code does not
+use the renamed attribute).
+
 ## Status at a glance
 
 | Block | What | State |

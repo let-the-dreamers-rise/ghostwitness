@@ -11,7 +11,7 @@ Common indexed attributes: `app` str=`ghostwitness`, `kind` str, `sid` str (32 l
 | Kind | Indexed attributes | Unindexed bytes |
 |---|---|---|
 | segment | `i` u64, `recordHash` str | `data`: GWP record containing header, entry, signed root and inclusion proof |
-| upload | `i`, `j`, `bytes` u64; `ref`, `sha256`, `uploader`, `recordHash` str | `ticket`: recorder-signed GWT upload assignment |
+| upload | `i`, `j`, `size` u64; `ref`, `sha256`, `uploader`, `recordHash` str | `ticket`: recorder-signed GWT upload assignment |
 
 `ref` is the ordinary 32-byte Swarm reference to an already AES-GCM-encrypted shard, not a Swarm
 encrypted reference containing a decryption key. Media, content/recovery private keys and device

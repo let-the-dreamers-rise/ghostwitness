@@ -10,9 +10,16 @@ import xyz.ghostwitness.core.eth.Keccak
 object ArkivCodec {
     val address: ByteArray get() = Bytes.fromHex("4400000000000000000000000000000000000044")
 
+    private val RESERVED = setOf(
+        "and", "or", "not", "true", "false", "between", "startswith", "exists", "typeof", "order", "by", "asc", "desc",
+        "bool", "i32", "u64", "u256", "dec", "bytes", "str", "addr", "key",
+    )
+
     class Attribute(val name: String, val type: Int, val value: ByteArray) {
         init {
-            require(name.matches(Regex("[A-Za-z][A-Za-z0-9._-]{0,31}"))) { "invalid attribute name" }
+            require(name.matches(Regex("[A-Za-z][A-Za-z0-9._-]{0,31}")) && "--" !in name) { "invalid attribute name" }
+            // Reserved by Arkiv's query language: such an attribute could be written but never queried.
+            require(name.lowercase() !in RESERVED) { "'$name' is a reserved Arkiv query word" }
             require(type in listOf(7, 0x88, 0x83)) { "unsupported attribute type" }
             require(type != 0x88 || value.size <= 128) { "string too long" }
         }
