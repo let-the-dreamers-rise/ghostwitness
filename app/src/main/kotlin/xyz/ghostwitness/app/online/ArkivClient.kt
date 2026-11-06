@@ -91,7 +91,7 @@ class ArkivClient(private val settings: OnlineSettings, private val store: Onlin
                 receipt = rpc("eth_getTransactionReceipt", JSONArray().put(hash)) as? JSONObject
                 if (receipt == null) throw error
             }
-            if (receipt == null) receipt = rpc("eth_getTransactionReceipt", JSONArray().put(hash)) as? JSONObject
+            if (receipt == null) receipt = awaitReceipt(hash)
         }
         val confirmed = receipt ?: throw OnlineIssue("Arkiv transaction pending; will retry")
         if (quantity(confirmed.getString("status")) != BigInteger.ONE) {
@@ -109,8 +109,22 @@ class ArkivClient(private val settings: OnlineSettings, private val store: Onlin
         store.checkpoint(journalFile, state.put("indexed", true))
     }
 
+    /**
+     * Rabdi seals a block about every two seconds. Waiting briefly for inclusion keeps one job run moving through
+     * the queue; ending the run on every fresh broadcast put each write behind JobScheduler's growing backoff.
+     */
+    private fun awaitReceipt(hash: String): JSONObject? = poll { rpc("eth_getTransactionReceipt", JSONArray().put(hash)) as? JSONObject }
+
+    private fun <T : Any> poll(read: () -> T?): T? {
+        repeat(POLLS) { attempt ->
+            read()?.let { return it }
+            if (attempt < POLLS - 1) Thread.sleep(POLL_INTERVAL_MS)
+        }
+        return null
+    }
+
     private fun verifyEntity(key: String, owner: String, creator: String, expected: List<ArkivCodec.Attribute>) {
-        val entity = rpc("arkiv_getEntity", JSONArray().put(key)) as? JSONObject ?: throw OnlineIssue("Entity readback pending")
+        val entity = poll { rpc("arkiv_getEntity", JSONArray().put(key)) as? JSONObject } ?: throw OnlineIssue("Entity readback pending")
         require(entity.getString("owner").equals(owner, true) && entity.getString("creator").equals(creator, true)) { "Entity ownership mismatch" }
         val actual = attributes(entity)
         expected.forEach { attr ->
@@ -128,6 +142,8 @@ class ArkivClient(private val settings: OnlineSettings, private val store: Onlin
     }
 
     companion object {
+        private const val POLLS = 15
+        private const val POLL_INTERVAL_MS = 2_000L
         fun attributes(entity: JSONObject): Map<String, String> {
             val attrs = entity.getJSONArray("attributes")
             return (0 until attrs.length()).associate { val a = attrs.getJSONObject(it); a.getString("name") to a.getString("value") }
