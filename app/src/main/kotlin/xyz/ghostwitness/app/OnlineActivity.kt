@@ -90,14 +90,14 @@ class OnlineActivity : Activity() {
         busy = true; recordings.removeAllViews(); status.text = "Approve the wallet connection, then sign the GhostWitness authorization. No transaction or private-key export is requested."
         try {
             WalletConnection.connect(applicationContext, { uri -> openWallet(uri) }) { owner ->
-                if (owner == null) { finishError("Wallet connection was rejected or timed out"); return@connect }
+                if (owner == null) { finishError("Wallet connection was rejected or timed out" + walletReason()); return@connect }
                 executor.execute {
                     try {
                         val keys = WalletKeys(applicationContext)
                         val challenge = keys.challenge(owner)
                         postUi {
                             WalletConnection.sign(challenge.message, owner, { openWallet(null) }) { signature ->
-                                if (signature == null) { finishError("Wallet signature was rejected or timed out"); return@sign }
+                                if (signature == null) { finishError("Wallet signature was rejected or timed out" + walletReason()); return@sign }
                                 executor.execute {
                                     try { keys.login(challenge, signature); postUi { busy = false; showOwner(); status.text = "Signed in. Start recording or find your uploaded recordings." } }
                                     catch (_: Exception) { finishError("Wallet sign-in failed. Check key service and try again.") }
@@ -109,6 +109,8 @@ class OnlineActivity : Activity() {
             }
         } catch (_: Exception) { finishError("Could not initialize wallet connection. Check configuration; restart after changing wallet settings.") }
     }
+
+    private fun walletReason() = WalletConnection.lastReason.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
 
     private fun findRecordings() {
         if (busy) return
