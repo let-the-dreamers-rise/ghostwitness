@@ -213,6 +213,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CapturePipeline.Listene
         shutdownPipeline()
         try {
             val recovery = RecoveryKeys.resolve(BuildConfig.RECOVERY_PUB_HEX)
+            if (recovery.testMode && !BuildConfig.DEBUG) {
+                state = state.copy(error = "set a recovery key first: without it nothing can be recovered")
+                render()
+                return
+            }
             val debugDir = if (debugToggle?.isChecked == true) getExternalFilesDir("debug-plain") else null
             val created = CapturePipeline(this, cameraSpec, surface, tier, recovery, debugDir, this)
             if (!autoTier) created.setManualTier(tier)

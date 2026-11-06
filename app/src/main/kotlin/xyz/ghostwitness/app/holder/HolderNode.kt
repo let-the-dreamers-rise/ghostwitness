@@ -44,7 +44,8 @@ class HolderNode(context: Context, private val listener: Listener) {
     private val handler = Handler(thread.looper)
     private val ledger = HolderLedger()
     private val store = HoldingStore(context.applicationContext.filesDir)
-    private val name = "${NearbyLink.HOLDER_PREFIX}-${Integer.toHexString(SecureRandom().nextInt(NAME_SPACE))}"
+    /** Random per holder run: the witness counts holders by this tag, so it must not collide or repeat. */
+    private val name = "${NearbyLink.HOLDER_PREFIX}-${Bytes.toHex(ByteArray(TAG_BYTES).also { SecureRandom().nextBytes(it) })}"
     private var state = HolderState()
     private var witness: String? = null
     private var quality: LinkQuality? = null
@@ -163,6 +164,6 @@ class HolderNode(context: Context, private val listener: Listener) {
         const val TICK_MS = 100L
         const val STATUS_INTERVAL_MS = 500L
         const val SHORT_ID_CHARS = 8
-        const val NAME_SPACE = 0x10000
+        const val TAG_BYTES = 8
     }
 }
