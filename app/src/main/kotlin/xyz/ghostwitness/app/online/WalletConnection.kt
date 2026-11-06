@@ -45,6 +45,13 @@ object WalletConnection : SignClient.DappDelegate {
         executor.execute {
             fun start() {
                 SignClient.setDappDelegate(this)
+                // An approval that arrived while this screen was not listening is still a valid session: reuse it
+                // instead of asking MetaMask to connect again.
+                approvedAccount()?.let { (session, account) ->
+                    topic = session
+                    main.post { connectResult?.invoke(account); connectResult = null }
+                    return
+                }
                 val pairing = CoreClient.Pairing.create { fail() } ?: return
                 val proposal = Sign.Model.Namespace.Proposal(listOf(CHAIN), listOf("personal_sign"), listOf("accountsChanged", "chainChanged"))
                 SignClient.connect(Sign.Params.ConnectParams(sessionNamespaces = mapOf("eip155" to proposal), pairing = pairing),
@@ -73,6 +80,15 @@ object WalletConnection : SignClient.DappDelegate {
         }
     }
 
+    private fun approvedAccount(): Pair<String, String>? = runCatching {
+        SignClient.getListOfActiveSessions().firstNotNullOfOrNull { session ->
+            val namespace = session.namespaces["eip155"] ?: return@firstNotNullOfOrNull null
+            val account = namespace.accounts.firstOrNull { it.startsWith("$CHAIN:") }
+            if (account == null || "personal_sign" !in namespace.methods) null
+            else session.topic to account.substringAfterLast(':').lowercase()
+        }
+    }.getOrNull()
+
     private fun fail() { main.post { connectResult?.invoke(null); signatureResult?.invoke(null); connectResult = null; signatureResult = null; attempt++ } }
     override fun onSessionApproved(approvedSession: Sign.Model.ApprovedSession) {
         val account = approvedSession.namespaces["eip155"]?.accounts?.firstOrNull { it.startsWith("$CHAIN:") }
@@ -86,12 +102,16 @@ object WalletConnection : SignClient.DappDelegate {
         main.post { signatureResult?.invoke(signature); signatureResult = null; attempt++ }
     }
     override fun onSessionRejected(rejectedSession: Sign.Model.RejectedSession) = fail()
-    override fun onSessionUpdate(updatedSession: Sign.Model.UpdatedSession) = fail()
-    @Deprecated("SDK callback") override fun onSessionEvent(sessionEvent: Sign.Model.SessionEvent) = fail()
+    // Wallets routinely send namespace updates and chainChanged/accountsChanged events right after approval;
+    // they do not cancel a pending connection or signature.
+    override fun onSessionUpdate(updatedSession: Sign.Model.UpdatedSession) = Unit
+    @Deprecated("SDK callback") override fun onSessionEvent(sessionEvent: Sign.Model.SessionEvent) = Unit
     override fun onSessionExtend(session: Sign.Model.Session) = Unit
     override fun onSessionDelete(deletedSession: Sign.Model.DeletedSession) { topic = null; fail() }
     override fun onProposalExpired(proposal: Sign.Model.ExpiredProposal) = fail()
     override fun onRequestExpired(request: Sign.Model.ExpiredRequest) = fail()
     override fun onConnectionStateChange(state: Sign.Model.ConnectionState) = Unit
-    override fun onError(error: Sign.Model.Error) = fail()
+    // Relay errors are usually transient (the socket pauses while the app is in the background and the SDK
+    // reconnects). Explicit rejections, expiries and the five-minute timeout end a pending request instead.
+    override fun onError(error: Sign.Model.Error) = Unit
 }

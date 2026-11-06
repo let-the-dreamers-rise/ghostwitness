@@ -87,7 +87,7 @@ class OnlineActivity : Activity() {
     private fun login() {
         if (busy) return
         if (settings.keyService.isBlank() || settings.walletProjectId.isBlank()) { status.text = "Save key service and WalletConnect settings first"; return }
-        busy = true; recordings.removeAllViews(); status.text = "Approve the wallet connection, then sign the GhostWitness authorization. No transaction or private-key export is requested."
+        busy = true; recordings.removeAllViews(); status.text = "Approve the connection in MetaMask, then come back to GhostWitness; MetaMask opens again for the signature. No transaction or private-key export is requested."
         try {
             WalletConnection.connect(applicationContext, { uri -> openWallet(uri) }) { owner ->
                 if (owner == null) { finishError("Wallet connection was rejected or timed out"); return@connect }
