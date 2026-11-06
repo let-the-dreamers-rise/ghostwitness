@@ -23,6 +23,95 @@ See [wallet setup and recovery](docs/wallet-recovery.md) and [upload/reward inst
 required Bee/RPC/funding configuration and remaining live-device validation. Existing design details in
 `docs/spec.md` are superseded by that flow where they describe offline recovery or exclude rewards.
 
+## Architecture
+
+What runs where, and what crosses each link. Links carry ciphertext or public metadata only;
+plaintext video exists only on the recorder while capturing and on the recovery phone after unlock.
+
+```mermaid
+flowchart LR
+    subgraph REC["Phone A: recorder (offline OK)"]
+        CAM["Camera2 + mic<br/>H.264/AAC, 2 s MP4 segments"]
+        ENC["AES-256-GCM, chained AAD<br/>content key HPKE-wrapped"]
+        RS["Reed-Solomon 5 shards<br/>any 3 rebuild"]
+        SIGN["Merkle commitment + signed root<br/>GWO1 wallet ownership proof"]
+        CAM --> ENC --> RS --> SIGN
+    end
+
+    subgraph WIT["Phones B: witnesses (no wallet needed)"]
+        HOLD["Holder store<br/>persist, then ACK"]
+        JOB["UploadEngine<br/>JobScheduler, retries"]
+        WKEY["Device writer key<br/>Android Keystore"]
+        HOLD --> JOB
+        WKEY -. signs .-> JOB
+    end
+
+    subgraph NET["Decentralized storage and index"]
+        BEE["Swarm via Bee node<br/>POST /bytes, encrypted shards"]
+        ARK["Arkiv Rabdi<br/>session / segment / upload entities<br/>owned by recorder wallet"]
+    end
+
+    subgraph OWN["Owner side"]
+        MM["MetaMask<br/>via Reown Sign"]
+        KS["Key service<br/>verifies wallet, rewraps key"]
+        RCV["Phone C: recovery<br/>any new phone"]
+    end
+
+    subgraph RWD["Optional rewards, Base Sepolia"]
+        VER["Verifier / relayer"]
+        POOL["UploadRewards pool"]
+    end
+
+    MM -- "sign-in, recorder delegation" --> CAM
+    SIGN -- "Nearby: GW2 shards, GWP, GWT, GWO1" --> HOLD
+    JOB -- "ciphertext shard" --> BEE
+    JOB -- "create + transfer to owner<br/>ref, sha256, size" --> ARK
+    JOB -. "claim entityKey" .-> VER
+    VER -. "reads entity + bytes" .-> ARK
+    VER -. "pays one claim per shard" .-> POOL
+    MM -- "same wallet signs in" --> RCV
+    RCV -- "arkiv_query by owner" --> ARK
+    RCV -- "GET /bytes/ref, 3 of 5" --> BEE
+    RCV -- "/unlock with GWO1 proof" --> KS
+    KS -- "content key, HPKE to fresh device key" --> RCV
+```
+
+Recovery after the recorder phone is gone:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Owner
+    participant C as Phone C (recovery)
+    participant W as MetaMask
+    participant K as Key service
+    participant A as Arkiv (Rabdi)
+    participant S as Swarm (Bee)
+
+    Owner->>C: Connect MetaMask and sign in
+    C->>K: /challenge
+    K-->>C: single-use challenge
+    C->>W: personal_sign(challenge)
+    W-->>C: signature
+    C->>K: /login
+    K-->>C: 1 h bearer token
+    Owner->>C: Find my recordings
+    C->>A: arkiv_query kind=session, owner=wallet
+    A-->>C: sessions with GWO1 proofs
+    C->>C: verify wallet + recorder signatures, list by date
+    Owner->>C: Recover
+    C->>K: /unlock(GWO1 proof, fresh delivery public key)
+    K-->>C: content key wrapped to delivery key
+    C->>A: arkiv_query kind=segment and kind=upload, sid
+    A-->>C: signed records + Swarm refs
+    loop each 2 s segment
+        C->>S: GET /bytes/ref (3 distinct shards)
+        S-->>C: ciphertext
+        C->>C: check Merkle + sha256, RS rebuild, decrypt, check hash chain
+    end
+    C-->>Owner: play MP4s in order, report gaps
+```
+
 ## Live testnet deployment
 
 Run on real Android phones during the event: a recorder, receiving witnesses and a recovery phone.
