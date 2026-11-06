@@ -10,8 +10,8 @@ class RecoveryKeyChoice(publicKey: ByteArray, val testMode: Boolean) {
 }
 
 /**
- * Until QR import of the recovery holder's key lands (block 5), the key comes from the build property
- * `gw.recoveryPub`. Without it the app makes a throwaway key pair and drops the private half, so the whole
+ * The key comes from the wallet service's signed authorization cached in settings. `gw.recoveryPub`
+ * is a legacy development fallback. Without a key the app makes a throwaway pair and drops the private half, so the whole
  * pipeline runs but recordings can't be recovered. The UI says so, and release builds refuse to record.
  */
 object RecoveryKeys {

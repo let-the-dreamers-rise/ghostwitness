@@ -13,6 +13,7 @@ import xyz.ghostwitness.core.crypto.Bytes
 import xyz.ghostwitness.core.crypto.RecoveryKeyPair
 import xyz.ghostwitness.core.crypto.KeyWrap
 import xyz.ghostwitness.core.eth.EthKey
+import xyz.ghostwitness.core.recovery.WalletAuthorization
 
 /** Private keys and endpoint credentials are encrypted with a device-bound Android Keystore key. */
 class OnlineSettings(context: Context) {
@@ -46,6 +47,42 @@ class OnlineSettings(context: Context) {
             require(value.toBigDecimal().signum() > 0 && value.toBigDecimal().scale() <= 18) { "Positive fee ceiling required" }
             prefs.edit().putString("max-fee", value).commit()
         }
+    var keyService: String
+        get() = secret("key-service") ?: ""
+        set(value) {
+            requireHttps(value)
+            if (value.isNotBlank()) {
+                val uri = java.net.URI(value.trim().trimEnd('/'))
+                require(uri.path.isNullOrEmpty() && uri.query == null) { "Key service must be an HTTPS origin without a path" }
+            }
+            if (value.trim().trimEnd('/') != keyService) logoutOwner()
+            putSecret("key-service", value.trim().trimEnd('/'))
+        }
+    var walletProjectId: String
+        get() = prefs.getString("wallet-project", "").orEmpty()
+        set(value) { require(value.isBlank() || value.matches(Regex("[0-9a-fA-F]{32}"))); prefs.edit().putString("wallet-project", value).commit() }
+
+    fun walletAuthorization(): WalletAuthorization? = secret("wallet-certificate")?.let {
+        WalletAuthorization.decode(Bytes.fromHex(it))
+    }?.takeIf { it.origin == keyService && it.owner == owner && it.recorder == EthKey.checksumless(writer().address) }
+
+    fun saveWalletLogin(auth: WalletAuthorization, token: String, expires: Long) {
+        require(auth.verify() && auth.origin == keyService && auth.recorder == EthKey.checksumless(writer().address))
+        require(token.matches(Regex("[0-9a-f]{64}")) && expires > System.currentTimeMillis())
+        putSecret("wallet-certificate", Bytes.toHex(auth.encode()))
+        putSecret("wallet-token", token)
+        putSecret("wallet-token-expiry", expires.toString())
+        owner = auth.owner
+        recoveryPublic = Bytes.toHex(auth.recoveryPublicKey)
+    }
+    fun walletToken(): String = secret("wallet-token")?.takeIf {
+        secret("wallet-token-expiry")?.toLongOrNull()?.let { expires -> expires > System.currentTimeMillis() } == true
+    } ?: error("Sign in with your wallet again to unlock recordings")
+
+    fun logoutOwner() {
+        check(vault.edit().remove("wallet-certificate").remove("wallet-token").remove("wallet-token-expiry").commit())
+        prefs.edit().remove("owner").remove("recovery-public").commit()
+    }
 
     fun writer(): EthKey = synchronized(LOCK) {
         secret("writer")?.let { EthKey.fromPrivateKey(Bytes.fromHex(it)) }

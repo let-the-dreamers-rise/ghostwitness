@@ -19,6 +19,7 @@ import xyz.ghostwitness.app.mesh.WitnessMeshDriver
 import xyz.ghostwitness.app.store.SessionStore
 import xyz.ghostwitness.app.online.OnlineSettings
 import xyz.ghostwitness.core.recovery.RecoveryRecord
+import xyz.ghostwitness.core.recovery.SessionOwnership
 import xyz.ghostwitness.core.merkle.Merkle
 import xyz.ghostwitness.core.capture.Tier
 import xyz.ghostwitness.core.crypto.Bytes
@@ -64,9 +65,6 @@ class CapturePipeline(
     }
 
     private val main = Handler(Looper.getMainLooper())
-    private val captureThread = HandlerThread("gw-capture").apply { start() }
-    private val capture = Handler(captureThread.looper)
-    private val sealer: ExecutorService = Executors.newSingleThreadExecutor { Thread(it, "gw-seal") }
     private val clockNanos: () -> Long = if (spec.realtimeTimestamps) SystemClock::elapsedRealtimeNanos else System::nanoTime
     private val startWallMs = System.currentTimeMillis()
     private val ptsOriginUs = clockNanos() / NANOS_PER_US
@@ -75,6 +73,12 @@ class CapturePipeline(
     private var session: RecordingSession = newSession(recovery.publicKey)
     private val store = SessionStore(context.applicationContext.filesDir, session.header)
     private val owner = OnlineSettings(context).owner.takeIf { it.isNotBlank() }?.let { Bytes.fromHex(it.removePrefix("0x")) }
+    private val ownership = OnlineSettings(context).walletAuthorization()?.let { SessionOwnership.create(session.header, it, OnlineSettings(context).writer()) }
+    init { ownership?.let { xyz.ghostwitness.app.online.OnlineStore.atomic(File(store.dir, "ownership.bin"), it.encode()) } }
+    // Validate/persist the authorization before starting long-lived capture threads.
+    private val captureThread = HandlerThread("gw-capture").apply { start() }
+    private val capture = Handler(captureThread.looper)
+    private val sealer: ExecutorService = Executors.newSingleThreadExecutor { Thread(it, "gw-seal") }
     val sessionIdHex: String = Bytes.toHex(session.header.sessionId)
     val sessionCode: String = sessionIdHex + ":" + Bytes.toHex(Bytes.sha256(session.header.sessionPublicKey))
 
@@ -130,7 +134,7 @@ class CapturePipeline(
         }
     }
     private val meshDriver: WitnessMeshDriver =
-        WitnessMeshDriver(context, session.header, store, startTier, spec.tiers, meshListener, session::authorizeUpload)
+        WitnessMeshDriver(context, session.header, store, startTier, spec.tiers, meshListener, session::authorizeUpload, ownership)
 
     fun start() {
         meshDriver.start()

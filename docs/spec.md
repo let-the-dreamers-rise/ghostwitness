@@ -5,6 +5,9 @@
 > witnesses; source `WitnessMesh` means recorder and `HolderNode` means receiving witness. The revised
 > implementation adds background Swarm/Arkiv uploads, online owner recovery and optional verified upload
 > rewards. Historical acceptance claims below are not fresh live-device or live-network evidence.
+> [wallet-recovery.md](wallet-recovery.md) also supersedes the recovery-phone key pairing,
+> manual owner-address setup and separate recovery-key trust model. The current implementation uses
+> MetaMask signatures and a trusted wallet-authorized key service for recovery on a new device.
 
 Event: ETHGlobal Mumbai 2026. Partner picks: **EF CROPS and Arkiv (Build from scratch + Arkiv/Swarm
 bonus)**. Arc and World are not targeted. This replaces `Downloads/GHOSTWITNESS-SPEC.md`, which is left

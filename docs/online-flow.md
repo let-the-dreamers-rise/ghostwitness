@@ -1,33 +1,21 @@
 # Online witness uploads and owner recovery
 
-This is the current product flow. The recorder records and distributes encrypted shards locally. Nearby receiving phones are called witnesses in the product (the source still uses `holder`). Witnesses upload when suitable internet is available. The original owner's recovery phone reads Arkiv, downloads Swarm files, verifies, reconstructs and decrypts locally.
+See [wallet login, deployment and complete owner flow](wallet-recovery.md) for the current recovery UI. The owner connects MetaMask on the recorder before going offline. A wallet-signed delegation authorizes offline capture. Any new recovery phone connects the same wallet, queries signed session entries by owner, lists recordings by date/time and recovers a selection. No pairing, manual wallet address, session-code entry or separate recovery secret is needed. The wallet signs; a trusted key service unlocks recording keys. It can decrypt recordings and must retain its master.
 
-## Run the Android flow
+## Witness upload setup
 
-1. Build/install `:app:assembleDebug` on the recorder, receiving witnesses, and recovery phone.
-2. On the **recovery phone**, open **Online setup and owner recovery**, create the owner's recovery key, and retain that phone. Copy the displayed **public** key to the recorder. Private keys are encrypted with Android Keystore. A pre-existing `publicHex:privateHex` backup can be imported; keys cannot be silently replaced. There is no QR scanner or key-backup export UI yet.
-3. In setup on the **recorder**, save that public key and the original owner's Ethereum wallet address. No wallet private key is needed on the recorder. The wallet address is also the owner used for the optional reward pool on Base Sepolia.
-4. On each **receiving witness**, configure an HTTPS Bee API URL, its 64-hex postage batch ID, and the Rabdi RPC URL. Use the device's own access key if desired. Save setup and fund the displayed per-device writer address using the Rabdi faucet. Configure the maximum GLM fee per write; default is 0.01 GLM. Saving configured upload settings enables funded background index writes. The private writer key stays in this device's encrypted vault.
-5. Start witness mode on receiving phones and recording on the recorder. Save the full **session code** displayed on the recorder: `session-id:SHA256(session-public-key)`. Transfer that code to the original owner through a trusted channel. The hash pins the recording's signer, preventing a copied Arkiv tag or unsolicited ownership transfer from substituting a recording.
-6. Witnesses store shards, independently verifiable segment records (`GWP`), and recorder-signed upload assignments (`GWT`). GWS/GWR/GWE/GW2/GWA formats remain unchanged. A `GWI1` greeting gives the recorder the receiving witness's writer address. The recorder signs the session ID, segment index, shard index, writer address and shard SHA-256 in each assignment. Assignments are repeated with shard retries.
-7. Android JobScheduler uploads after a qualifying connection becomes available. **Unmetered internet** is the default proxy for good connectivity; setup can permit metered connections. Jobs survive screen exit and reboot, with periodic catch-up and retry backoff. Force-stop, uninstall, battery restrictions, and erased app storage can still prevent work. Offline Nearby reception never waits for these uploads.
-8. The uploader verifies stored bytes, uploads those exact ciphertext shard bytes using Bee `/bytes`, then downloads and compares them. It writes a `segment` entity and an `upload` entity to Arkiv, transferring ownership to the original owner's wallet in the same native transaction. It records the exact signed transaction before broadcast, reconciles receipt/entity readback before progressing, and stops automatic recreation on a reverted receipt. A missing receipt preserves the original transaction for retry/reconciliation.
-9. On the **recovery phone**, configure a Bee read endpoint and Rabdi RPC, save setup, enter the owner's address and trusted full session code, and choose **Download and recover**. No postage or funded writer is needed for recovery reads. The app queries Arkiv, verifies signed entry inclusion proofs, tries candidate Swarm references until three distinct valid shard indices are available, unwraps K with the owner's X25519 recovery private key, reconstructs/decrypts and plays MP4s in order. Gaps are reported and later segments continue.
+1. Install the app on recorder, witnesses and recovery phone. Configure the owner's Reown project ID and HTTPS key-service origin, then sign in on the recorder.
+2. On each receiving witness, set an HTTPS Bee API, 64-hex postage batch ID and Rabdi RPC (with its own access key if needed). Fund the displayed device writer on Rabdi. Save connection settings; the maximum per-write fee defaults to 0.01 GLM. A witness does not need an owner wallet login to receive/upload.
+3. Start witness mode and record. Nearby transfers repeat GWO1 ownership proofs, GWP segment proofs, GWT recipient-bound upload tickets, GW2 shard headers and FILE bodies. GWI1 announces the witness writer address. Original GWS/GWR/GWE/GW2/GWA encodings remain unchanged.
+4. Witnesses persist valid shards before ACK. JobScheduler uploads on qualifying internet (unmetered by default), with retries and periodic catch-up after screen exit/reboot. Android force-stop, battery restrictions and erased storage can stop jobs.
+5. UploadEngine verifies bytes/tickets, uploads exact ciphertext via Bee `/bytes`, reads it back and compares it, then publishes session/segment/upload entities to Arkiv and transfers ownership to the owner. Exact signed transactions are journaled before broadcast. Receipts and entity readback must reconcile before progress; uncertain submissions retain their signed bytes, while reverted transactions require manual reconciliation.
+6. On the recovery phone, configure Arkiv, a Bee read endpoint and the same key service/Reown project. Connect the original wallet, find recordings and select Recover. No postage or funded writer is required for reads. The app verifies wallet/delegated-recorder authorization, obtains a content key wrapped to a fresh local delivery key, fetches three distinct valid shards per segment, reconstructs, decrypts and plays available files. Gaps continue and are reported.
 
-Recovered plaintext MP4s and a report are retained in private `files/recovered/<sid>/`. Playback currently uses platform `VideoView`, with one file after another; Media3 export and share/export UI are not implemented. Recovery reports the known signed history and cannot discover a recording tail whose metadata never reached the network. A crash may also lose the open segment and queued work that was not sealed/persisted.
+## Durable state and availability
 
-## What is persisted
+Witness files are under `files/holdings/<sid>/`: `ownership.bin`, `records/<i>.bin`, `tickets/<i>-<j>.bin` and `shards/<i>-<j>.bin`. Atomic upload journals include `uploads/session.json`, `metadata-<i>.json` and `<i>-<j>.json`; they preserve references, raw transactions, receipts, entity keys and reward state. Late-arriving ownership proofs are published even if a shard was already indexed. Old manually keyed sessions are not migrated to wallet discovery.
 
-- Receiving witness files: `files/holdings/<sid>/shards/<i>-<j>.bin`, `records/<i>.bin`, `tickets/<i>-<j>.bin`.
-- Progress: `uploads/<i>-<j>.json` and `uploads/metadata-<i>.json`, written with Android `AtomicFile`. Journals preserve references, raw transactions/hashes, receipt/readback state, entity key and reward state.
-- Upload work is discovered from durable records and shard files on disk. A restart does not require recreating a Nearby connection to upload an already received contribution.
-- Existing pre-change holdings without GWP/GWT metadata cannot be uploaded by this new path. Record new sessions for the demo.
-
-## Verification and availability
-
-GWP contains the public session header, owner routing address, manifest entry, signed root and Merkle inclusion path. Each segment verifies independently, so a missing earlier entry cannot block authenticating a later uploaded segment. The routing address is not part of the old root signature; authoritative recording identity comes from the pinned session signing key. Reward authorization additionally comes from the recorder-signed GWT assignment.
-
-Three distinct valid shard indices are required for each remotely recoverable segment. Three copies of the same shard do not suffice. Nearby ACKs describe local storage only. Swarm readback confirms bytes observed through the configured Bee endpoint at that moment, not perpetual network custody. The independent reward verifier is a trusted operator, not a decentralized storage-proof protocol.
+Recovery saves plaintext MP4s/report in private `files/recovered/<sid>/` and plays them using VideoView. Export and offline holder serving are unimplemented. Open/unsealed segments and metadata that never reached the network can be lost. Three copies of one shard cannot replace three distinct indices. Nearby ACKs prove local storage only; Bee readback is an observation through that endpoint, not perpetual storage proof. Arkiv index retention is approximately 30 days unless renewed.
 
 ## Reward path
 
@@ -62,7 +50,7 @@ The service binds loopback port 8787. Expose `/claim` through an HTTPS reverse p
 
 ## Current external setup and validation
 
-No team Bee node, postage batch, funded Rabdi writer, reward deployment or live entity/reference pair was supplied. Device-to-device and live cloud behavior still require those resources and real phones. Successful local builds/tests are not evidence of a live submission.
+No Reown project ID, HTTPS key service, team Bee node, postage batch, funded Rabdi writer, reward deployment or live entity/reference pair was supplied. Device-to-device and live cloud behavior still require those resources and real phones. Successful local builds/tests are not evidence of a live submission.
 
 Protocol references used for implementation:
 
@@ -72,4 +60,4 @@ Protocol references used for implementation:
 - [Android JobScheduler constraints and persistence](https://developer.android.com/reference/android/app/job/JobInfo.Builder).
 - [Base Sepolia network configuration](https://docs.base.org/get-started/connect-to-base).
 
-The Arkiv Codex plugin was installed locally (`arkiv@arkiv`, 0.5.4). Its tools are not active in the existing chat; local installation is not proof of an MCP connection, wallet funding or app integration. Android uses the native JSON-RPC API, not a guessed TypeScript SDK API.
+The Android implementation uses native Arkiv JSON-RPC. Installing the Arkiv plugin does not configure app endpoints, fund writers or deploy services.

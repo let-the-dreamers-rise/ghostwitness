@@ -21,6 +21,7 @@ import xyz.ghostwitness.app.online.OnlineStore
 import xyz.ghostwitness.app.online.UploadService
 import xyz.ghostwitness.core.recovery.RecoveryRecord
 import xyz.ghostwitness.core.recovery.UploadTicket
+import xyz.ghostwitness.core.recovery.SessionOwnership
 import xyz.ghostwitness.app.online.OnlineSettings
 import java.io.File
 
@@ -80,6 +81,15 @@ class HolderNode(context: Context, private val listener: Listener) {
 
         override fun onBytes(endpointId: String, bytes: ByteArray) {
             if (endpointId != witness) return
+            if (bytes.size >= 4 && String(bytes, 0, 4, Charsets.US_ASCII) == "GWO1") {
+                try {
+                    val proof = SessionOwnership.decode(bytes)
+                    require(state.header?.encode()?.contentEquals(proof.header.encode()) == true)
+                    OnlineStore(appContext.filesDir).saveOwnership(proof)
+                    UploadService.schedule(appContext)
+                } catch (_: Exception) { rejected++; lastProblem = "Could not validate wallet ownership" }
+                return
+            }
             if (bytes.size == 141 && String(bytes, 0, 3, Charsets.US_ASCII) == "GWT") {
                 try {
                     val ticket = UploadTicket.decode(bytes)

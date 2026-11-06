@@ -23,10 +23,11 @@ class ArkivClient(private val settings: OnlineSettings, private val store: Onlin
         return response.opt("result").takeUnless { it == JSONObject.NULL }
     }
 
-    fun query(owner: String, sid: String, kind: String, extra: String = ""): List<JSONObject> {
-        require(owner.matches(Regex("0x[0-9a-fA-F]{40}")) && sid.matches(Regex("[0-9a-f]{32}")))
-        require(kind in listOf("segment", "upload"))
-        val base = "app = str('ghostwitness') AND sid = str('$sid') AND kind = str('$kind') AND \$owner = addr($owner)"
+    fun query(owner: String, sid: String?, kind: String, extra: String = ""): List<JSONObject> {
+        require(owner.matches(Regex("0x[0-9a-fA-F]{40}")) && (sid == null || sid.matches(Regex("[0-9a-f]{32}"))))
+        require(kind in listOf("session", "segment", "upload") && (sid != null || kind == "session"))
+        val filter = sid?.let { " AND sid = str('$it')" }.orEmpty()
+        val base = "app = str('ghostwitness') AND kind = str('$kind') AND \$owner = addr($owner)" + filter
         val result = mutableListOf<JSONObject>()
         var last = ""
         repeat(1000) {

@@ -7,6 +7,7 @@ import xyz.ghostwitness.core.crypto.Bytes
 import xyz.ghostwitness.core.eth.EthKey
 import xyz.ghostwitness.core.recovery.UploadTicket
 import org.json.JSONObject
+import xyz.ghostwitness.core.recovery.SessionOwnership
 
 /** Only receiving witness holdings are uploaded here; capture never waits for internet. */
 class UploadEngine(context: Context) {
@@ -57,7 +58,7 @@ class UploadEngine(context: Context) {
         require(ticket.verify(record) && ticket.shard == task.shardIndex && ticket.shardHash.contentEquals(Bytes.sha256(bytes)) &&
             EthKey.checksumless(ticket.uploader) == uploader) { "Invalid upload assignment" }
         val state = store.journal(journal)
-        if (state.optBoolean("indexed")) return
+        // Ownership may arrive after the shard was already indexed. Still publish its discovery entry.
         if (!state.has("reference")) {
             val ref = bee.upload(bytes)
             store.checkpoint(journal, state.put("reference", ref))
@@ -68,6 +69,18 @@ class UploadEngine(context: Context) {
             store.checkpoint(journal, state.put("readbackVerified", true))
         }
         val encoded = record.encode()
+        val ownershipFile = File(task.sessionDir, "ownership.bin")
+        if (ownershipFile.exists()) {
+            val ownership = SessionOwnership.decode(ownershipFile.readBytes())
+            require(ownership.header.encode().contentEquals(record.header.encode()) && ownership.wallet.owner == owner)
+            val sessionBytes = ownership.encode()
+            val sessionDedupe = Bytes.toHex(Bytes.sha256("GW-SESSION".toByteArray(), sessionBytes))
+            arkiv.publish(owner, sid, "session", sessionDedupe, common(sid, "session", sessionDedupe) + listOf(
+                ArkivCodec.number("startedAt", ownership.header.startWallMs), ArkivCodec.str("recorder", ownership.wallet.recorder),
+                ArkivCodec.bytes("data", sessionBytes),
+            ), File(task.sessionDir, "uploads/session.json"))
+        }
+        if (state.optBoolean("indexed")) return
         val recordHash = Bytes.toHex(Bytes.sha256(encoded))
         val metadataId = Bytes.toHex(Bytes.sha256("GW-METADATA".toByteArray(), encoded))
         arkiv.publish(owner, sid, "segment", metadataId, common(sid, "segment", metadataId) + listOf(

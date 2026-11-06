@@ -24,6 +24,7 @@ import xyz.ghostwitness.core.wire.FrameFormatException
 import xyz.ghostwitness.core.wire.ShardHeader
 import xyz.ghostwitness.core.recovery.RecoveryRecord
 import xyz.ghostwitness.core.recovery.UploadTicket
+import xyz.ghostwitness.core.recovery.SessionOwnership
 
 /** What the record screen shows about the mesh. */
 data class MeshStatus(
@@ -57,6 +58,7 @@ class WitnessMeshDriver(
     ladder: List<Tier>,
     private val listener: Listener,
     private val authorizeUpload: (Int, Int, ByteArray, ByteArray) -> UploadTicket,
+    private val ownership: SessionOwnership? = null,
 ) {
     interface Listener {
         fun onMeshStatus(status: MeshStatus)
@@ -79,12 +81,13 @@ class WitnessMeshDriver(
     private var endpointOf: Map<String, String> = emptyMap()
     private var holderOf: Map<String, String> = emptyMap()
 
-    private val events = object : NearbyLink.Events {
+    private val events: NearbyLink.Events = object : NearbyLink.Events {
         override fun onConnected(endpointId: String, name: String) {
             endpointOf[name]?.let { old -> holderOf = holderOf - old }
             endpointOf = endpointOf + (name to endpointId)
             holderOf = holderOf + (endpointId to name)
             applyStep(mesh.onPeerConnected(state, name, LinkQuality.MEDIUM, now()))
+            ownership?.let { link.sendBytes(endpointId, it.encode()) }
         }
 
         override fun onDisconnected(endpointId: String) {
@@ -186,6 +189,7 @@ class WitnessMeshDriver(
         val file = store.shardFile(command.segmentIndex, command.shardIndex)
         val shardLen = file.length().toInt()
         val shardRoot = entry.shardRoots[command.shardIndex]
+        ownership?.let { link.sendBytes(endpoint, it.encode()) }
         // Repeat on every shard/retry: a witness needs its own signed proof even if other entries are absent.
         records[command.segmentIndex]?.let { link.sendBytes(endpoint, it.encode()) }
         val ticket = authorizeUpload(command.segmentIndex, command.shardIndex, writer, state.shardHashes.getValue(command.segmentIndex)[command.shardIndex])

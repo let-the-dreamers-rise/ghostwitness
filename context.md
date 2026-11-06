@@ -1,6 +1,6 @@
 # GhostWitness codebase context
 
-Updated 2026-11-06 after implementing the owner's clarified flow. Initial review covered all original source/test files and docs at `244acfb`; the working revision adds cloud uploads, online recovery and optional upload rewards. This document describes the current source. See `docs/online-flow.md` for setup and `running.md` for validation.
+Updated 2026-11-07 after implementing the owner's clarified flow and wallet-only recovery choice. Initial review covered all original source/test files and docs at `244acfb`; the current revision includes cloud uploads, wallet-authorized key delivery, online recovery and optional upload rewards. This document describes the current source. See `docs/wallet-recovery.md` and `docs/online-flow.md` for setup and `running.md` for validation.
 
 ## Product flow and terminology
 
@@ -14,11 +14,12 @@ The earlier spec's offline recovery priority and exclusion of rewards have been 
 
 - `core/`: pure Kotlin/JVM crypto, Reed-Solomon, Merkle trees, session/manifest formats, capture planning, scheduling, mesh logic, Ethereum/Arkiv encodings and recovery primitives.
 - `app/`: native Android platform-view UI, Camera2/MediaCodec/GL capture, Nearby transport, local stores, persistent upload jobs, network clients, online recovery and playback.
+- `key-service/`: trusted wallet-authorized key custodian, HTTP API behind HTTPS, SQLite challenge/token journal and cross-language crypto fixtures.
 - `rewards/`: Solidity reward pool, Node verifier/relayer, deployment/funding scripts and local contract/proof tests.
 - `arkiv/`: schema, integration rationale and submission evidence checklist. Live evidence is pending.
 - `docs/spec.md`: original v2.1 protocol design with an override pointing to current flow; `docs/online-flow.md`: current instructions; `docs/ai-usage.md`: attribution.
 
-Gradle 8.10.2, Kotlin 2.0.21, AGP 8.7.2, Java/JVM target 17. Android min SDK 29, compile/target 34, application ID `xyz.ghostwitness.app`, version 0.1.0. Core depends on BouncyCastle 1.78.1. App uses Nearby 19.3.0 and platform HTTP/JSON, JobScheduler, Android Keystore and VideoView. Rewards pin ethers 6.15.0, solc 0.8.30 and Ganache 7.9.2 in a lockfile.
+Gradle 8.11.1, Kotlin 2.2.0, AGP 8.10.1, Java/JVM target 17. Android min SDK 29, compile 35 / target 34, application ID `xyz.ghostwitness.app`, version 0.1.0. Core depends on BouncyCastle 1.78.1. App uses Nearby 19.3.0 and platform HTTP/JSON, JobScheduler, Android Keystore and VideoView. Rewards pin ethers 6.15.0, solc 0.8.30 and Ganache 7.9.2 in a lockfile.
 
 ```powershell
 .\gradlew.bat :core:test :core:koverVerify :app:assembleDebug :app:lintDebug
@@ -28,18 +29,20 @@ npm test
 npm run compile
 ```
 
-The core coverage gate is 80%. SDK platform 34 and JDK 17+ are needed. Local Android SDK configuration is ignored; node_modules, build outputs and .env files are ignored. No Android instrumentation suite or CI workflow is present.
+The core coverage gate is 80%. SDK platform 35 and JDK 17+ are needed. Local Android SDK configuration is ignored; node_modules, build outputs and .env files are ignored. No Android instrumentation suite or CI workflow is present.
+
+Gradle defaults to one worker, a 1536 MB heap and in-process Kotlin compilation so the wallet SDK build fits an 8 GB laptop. An earlier build with several resident JVMs exhausted host memory; the bounded configuration passes tests, coverage, APK packaging and lint. See `running.md` for final results.
 
 ## Capture and local transfer
 
-1. Recovery setup happens on the original owner's recovery phone: create an X25519 key pair and copy only its public key to the recorder. Recorder setup also needs the owner's wallet address. The wallet signing key and content recovery key are separate.
+1. Configure the HTTPS key service and Reown project ID, then connect MetaMask on the recorder and sign a public authorization. The service derives a stable per-wallet X25519 recovery key; its public half and wallet-signed device delegation are cached for offline capture. No owner private key is exported. See `docs/wallet-recovery.md`.
 2. `MainActivity` selects a camera and starts a single-use `CapturePipeline`. The default tier is V1, clamped to device capabilities. Debug builds without a recovery public key are explicitly unrecoverable TEST MODE; release capture refuses. A build property remains a public-key fallback.
 3. Camera2 feeds preview and an external SurfaceTexture. `CameraRenderer` crops/scales frames into H.264 input surfaces. `FrameGate` thins to the tier frame rate. `AudioEncoder` encodes mono 44.1 kHz AAC-LC at 32 kbps.
 4. `SegmentPlanner` emits muxing actions around two-second boundaries; video opens on a keyframe. `VideoChain` overlaps encoder generations for size changes and retires the old encoder after cutover. Bitrate changes immediately; fps changes at boundaries. Tier A retains a minimal video encoder but writes audio only.
 5. `SegmentSink` uses memfd on Android 11+ or a private temporary file on Android 10. `Mp4Scrubber` neutralizes metadata before sealing; parse failure reports an error and seals original metadata to preserve the evidence.
 6. The single sealer encrypts, erasure-codes, commits, signs and writes shards/entry/root before scheduling transfer. Plaintext buffers are cleared. Optional debug copies rebuild from shard indices 1,3,4 and deliberately retain playable plaintext files.
 7. Nearby uses `P2P_STAR`, service `xyz.ghostwitness.mesh`; the recorder advertises `GW-W-<sid-prefix>`, witnesses connect with random `GW-H-<tag>` names. BYTES control frames announce FILE shard payload IDs. Nearby chooses Bluetooth/Wi-Fi and handles upgrades. Matching role prefixes are automatically accepted.
-8. Receiving phones send `GWI1` with their device writer address. For a shard transfer the recorder sends its GWP signed entry proof, GWT signed upload assignment, GW2 header and FILE body. These repeat with shard retries. Original GWS/GWR/GWE/GW2/GWA encodings remain supported.
+8. Receiving phones send `GWI1` with their device writer address. For a shard transfer the recorder sends its GWO1 wallet ownership proof, GWP signed entry proof, GWT signed upload assignment, GW2 header and FILE body. These repeat with shard retries. Original GWS/GWR/GWE/GW2/GWA encodings remain supported.
 9. `HolderLedger` matches header and body in either order, checks length/root and known entry, then `HolderNode` persists before batched ACKs. The new upload path additionally verifies the independently signed record and assignment before publishing.
 
 Stop finishes capture and wipes K after queued sealing; transfer continues while the recorder screen stays active. Leaving/pausing the recorder stops capture/mesh. Witness cloud upload jobs continue independently of the receiving screen. Process death can lose the open segment and unpersisted work. Recorder capture and Nearby transfer do not automatically resume old sessions after restart.
@@ -55,7 +58,7 @@ Stop finishes capture and wipes K after queued sealing; transfer continues while
 - Session signatures are deterministic secp256k1/SHA-256, low-s, 64-byte r||s. Public key is 65-byte uncompressed SEC1. Running root signs `GWROOT || sid || uptoIndex || root`.
 - GWP embeds GWS header, owner routing address, entry, signed root and inclusion proof. It authenticates a segment without obtaining every earlier entry. Routing address is outside the old signed root; trusted identity comes from the pinned session-key hash.
 - GWT signs `GWASSIGN || sid || index || shard || uploader-address || shard-sha256`. This prevents someone from redirecting rewards by copying public references/tickets.
-- The full trusted session code is `sidHex:SHA256(session-public-key)`. It must be retained independently by the owner. Public Arkiv tags or unsolicited ownership transfers alone cannot establish authenticity.
+- GWO1 includes the complete session header, wallet-signed authorization and delegated recorder signature. Owner discovery verifies both signatures and pins the header. The session ID/key hash remains internal; the owner never enters a code. Public owner tags alone do not establish authenticity.
 - `SegmentRecovery` verifies the proof/pin, checks known chain links, unwraps K, verifies/rebuilds shards and GCM-decrypts. Across missing segments, the unavailable predecessor hash cannot be checked; the signed entry remains independently verifiable.
 - Only append from the newest `RecordingSession` state; branching from an older state could reuse the same nonce. K copies are cleared where owned, but comprehensive JVM/provider/signing-key zeroization is not guaranteed.
 
@@ -79,11 +82,11 @@ Auto evaluates every two seconds, constrained by 70% of measured busy-time goodp
 
 ## Durable uploads and Arkiv
 
-`OnlineSettings` encrypts RPC/Bee credentials, writer and recovery keys with Android Keystore. Each receiving device has its own persistent funded writer address; random Nearby tags are not reward identities. Upload settings include network constraint and maximum per-write GLM fee.
+`OnlineSettings` encrypts RPC/Bee credentials, the writer key, wallet authorization and bearer token with Android Keystore. Legacy locally stored recovery keys are retained but absent from the new UI. Each receiving device has its own persistent funded writer address; random Nearby tags are not reward identities. Upload settings include network constraint and maximum per-write GLM fee.
 
 `OnlineStore` discovers contributions from persisted `holdings/<sid>/records`, `tickets` and `shards` files. `uploads/<i>-<j>.json` and `metadata-<i>.json` checkpoint progress via AtomicFile. These are device-local journals; no keys are uploaded.
 
-`UploadService` uses persisted JobScheduler jobs, unmetered internet by default, exponential retries and periodic catch-up. `UploadEngine` verifies files/tickets, uploads the same encrypted shard bytes using Bee `/bytes` with deferred upload disabled, then downloads and compares bytes. It publishes a signed `segment` record followed by an `upload` entity with reference, hashes, uploader and ticket. Reward requests run separately so verifier downtime cannot stall evidence uploads.
+`UploadService` uses persisted JobScheduler jobs, unmetered internet by default, exponential retries and periodic catch-up. `UploadEngine` verifies files/tickets, uploads the same encrypted shard bytes using Bee `/bytes` with deferred upload disabled, then downloads and compares bytes. It publishes a wallet-authorized `session` entry, a signed `segment` record and an `upload` entity with reference, hashes, uploader and ticket. Reward requests run separately so verifier downtime cannot stall evidence uploads.
 
 `ArkivClient` targets Rabdi 7794095 and native operations at 0x4400000000000000000000000000000000000044. `ArkivCodec` sorts typed attributes and encodes create plus transfer to the original owner's wallet, predicting the key from chain/address/writer/entity-nonce/salt. Creation is readonly with about 30 days lifetime. Writer remains the creator. The original owner can extend/delete/transfer later.
 
@@ -93,7 +96,7 @@ Queries use typed predicates, constrained owner/session/kind, bounded keyset pag
 
 ## Online recovery and rewards
 
-`OnlineActivity` offers setup, recovery-key creation/import, upload status and recovery controls. `RecoveryEngine` queries segment records and uploads, discards malformed/untrusted entities, downloads candidates until each segment has three distinct valid shards, reconstructs/decrypts and saves private MP4s/report. `VideoView` plays available files sequentially. Gaps continue; an entirely unuploaded tail is unknowable. Export and QR pairing UI remain future work.
+`OnlineActivity` offers MetaMask sign-in, date-sorted owner recording discovery, selection/recovery, sign-out and connection settings. `WalletConnection` uses Reown Sign SDK 1.6.0; `WalletKeys` validates challenges and requests authenticated key delivery. The new `key-service/` Node/SQLite custodian verifies personal_sign, derives stable wallet keys from a backed-up master, and HPKE-rewraps selected content keys to ephemeral delivery keys. It can decrypt recordings; there is no confidentiality against the service operator. Challenges last five minutes, bearer tokens one hour, and offline recorder delegation 365 days. Same-wallet login on a new phone replaces pairing/manual recovery-key setup. No service deployment is bundled. `RecoveryEngine` queries segment records and uploads, discards malformed/untrusted entities, downloads candidates until each segment has three distinct valid shards, reconstructs/decrypts and saves private MP4s/report. `VideoView` plays available files sequentially. Gaps continue; an entirely unuploaded tail is unknowable. Export remains future work. QR pairing is not required by the wallet flow. Older manually keyed recordings are not migrated.
 
 `rewards/contracts/UploadRewards.sol` is an optional funded native-token pool, default deployment target Base Sepolia 84532. Pools are scoped to owner+sid, pin the recorder key, fix reward/expiry/max segments, pay once per owner/sid/index/shard and refund unused funds after expiry. Signatures bind contract, chain, owner, session, index, shard, recipient, reference and deadline. Recipient accounting distinguishes an already-paid contribution from a slot rewarded to another valid assigned witness.
 
@@ -109,7 +112,7 @@ Preserve single-owner mutable state, ordered session appends, GL detach before c
 
 ## Source navigation
 
-Core packages: `crypto` (Bytes, ChunkCipher, KeyWrap, SessionSecrets, SessionSigner); `rs` (Galois, GfMatrix, ReedSolomon, ShardCodec); `merkle` (Merkle); `manifest` (ManifestEntry, SignedRoot, ChainVerifier); `session` (SessionHeader, RecordingSession); `codec` (SegmentCodec); `capture` (Tier, FrameGate, RateController, SegmentPlanner); `sched` (SchedulerModel, Scheduler, Progress); `mesh` (ControlFrames, WitnessMesh, HolderLedger); `wire` (Frames); `media` (Mp4Scrubber); `eth` (Abi, Rlp, Keccak, EthKey, Eip1559Tx, LegacyTx); `arkiv` (ArkivCodec); `recovery` (RecoveryRecord, UploadTicket, SegmentRecovery).
+Core packages: `crypto` (Bytes, ChunkCipher, KeyWrap, SessionSecrets, SessionSigner); `rs` (Galois, GfMatrix, ReedSolomon, ShardCodec); `merkle` (Merkle); `manifest` (ManifestEntry, SignedRoot, ChainVerifier); `session` (SessionHeader, RecordingSession); `codec` (SegmentCodec); `capture` (Tier, FrameGate, RateController, SegmentPlanner); `sched` (SchedulerModel, Scheduler, Progress); `mesh` (ControlFrames, WitnessMesh, HolderLedger); `wire` (Frames); `media` (Mp4Scrubber); `eth` (Abi, Rlp, Keccak, EthKey, Eip1559Tx, LegacyTx); `arkiv` (ArkivCodec); `recovery` (RecoveryRecord, UploadTicket, SegmentRecovery, WalletAuthorization, SessionOwnership).
 
 App: MainActivity, HolderActivity, OnlineActivity, Permissions, RecoveryKeys; `capture` (CapturePipeline, CameraSource, AudioEncoder, VideoEncoder, VideoChain, SegmentMuxer, SegmentSink, gl/EglCore, CameraProgram, CameraRenderer); `mesh` (NearbyLink, WitnessMeshDriver); `holder` (HolderNode); `store` (SessionStore, HoldingStore); `online` (OnlineSettings, OnlineStore, Http, BeeClient, ArkivClient, UploadEngine, UploadService, RecoveryEngine, Numbers).
 
@@ -117,6 +120,6 @@ App: MainActivity, HolderActivity, OnlineActivity, Permissions, RecoveryKeys; `c
 
 Local verification: core tests and 80% Kover gate, Android debug assembly and lint, Solidity compilation and local EVM/proof tests. Independent ethers fixtures cover Arkiv ABI encoding and legacy signing. Tests include recovery of a later segment despite missing earlier entries, tampered proofs/tickets/shards, duplicate payouts, wrong-recipient authorization and expiry refunds. See running.md for final results.
 
-Real phones, a team Bee service/postage batch, funded Rabdi writers, reward deployment/pool/relay gas and live cloud integration are still required. No measured users, throughput, p95 recovery latency or live entity/reference links are claimed. The plugin is installed locally but MCP connectivity in this chat is not verified.
+A Reown project ID, deployed HTTPS key service, real phones, a team Bee service/postage batch, funded Rabdi writers, reward deployment/pool/relay gas and live cloud integration are still required. No measured users, throughput, p95 recovery latency or live entity/reference links are claimed. The plugin is installed locally but MCP connectivity in this chat is not verified.
 
 Known limits: no automatic recorder-session resume; no receiving-witness ledger/identity rehydration for Nearby (disk uploads do resume); incomplete recordings may lose the current segment; no offline recovery server or export UI; a public index expires without renewal; Android background restrictions can delay uploads; long sessions retain in-memory manifest/scheduler data; original stores use rename without a multi-file transaction; debug/plaintext and scrub-fallback privacy conditions remain. Contract/verifier code is a demo implementation and has not been independently audited.

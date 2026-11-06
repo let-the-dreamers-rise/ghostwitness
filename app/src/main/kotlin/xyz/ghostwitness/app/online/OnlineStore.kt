@@ -5,10 +5,18 @@ import java.io.File
 import org.json.JSONObject
 import xyz.ghostwitness.core.crypto.Bytes
 import xyz.ghostwitness.core.recovery.RecoveryRecord
+import xyz.ghostwitness.core.recovery.SessionOwnership
 
 /** Shards on disk are the durable queue; journals checkpoint uploads and exact signed transactions. */
 class OnlineStore(private val root: File) {
     data class Task(val sessionDir: File, val record: RecoveryRecord, val shardIndex: Int, val shardFile: File)
+
+    fun saveOwnership(proof: SessionOwnership) {
+        require(proof.verify())
+        val file = File(root, "holdings/${proof.sessionId}/ownership.bin")
+        if (file.exists()) require(file.readBytes().contentEquals(proof.encode())) { "Conflicting ownership proof" }
+        else atomic(file, proof.encode())
+    }
 
     fun saveRecord(record: RecoveryRecord) {
         require(record.verify())

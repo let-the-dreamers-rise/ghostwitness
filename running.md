@@ -3,7 +3,30 @@
 What is built, what is verified, and what is left. Updated as work lands. The design is in
 `docs/spec.md` (v2.1); "as built" there matches the code here.
 
-Last updated: 2026-11-06.
+Last updated: 2026-11-07.
+
+## Wallet recovery revision
+
+The owner now connects MetaMask on the recorder before capture and on any new recovery phone.
+Wallet-signed recorder delegations and GWO1 session proofs replace manual recovery-key setup and
+session-code entry. Arkiv discovery lists authenticated recordings by date/time. A trusted HTTPS
+key service verifies wallet sign-in and rewraps the selected recording key to a fresh local delivery
+key; the phone decrypts media locally. The custodian can decrypt recordings and must preserve its
+master. Reown project ID and service origin remain user configuration; deployment instructions are
+in `key-service/README.md` and `docs/wallet-recovery.md`.
+
+Verified after integrating upstream commits through `46d0884`: 152 core tests, zero failures/skips,
+80% Kover gate, Android debug APK and lint (zero errors, 45 warnings), three key-service tests including
+fresh-device recovery and HTTP authorization, and a clean Windows reward `npm ci`, two reward tests
+and Solidity compilation. Lint warnings concern UI text/KTX suggestions, synchronous preferences,
+orientation, target/dependency versions, API annotation and missing app icon. No checks were disabled.
+
+Build tooling is Gradle 8.11.1 / AGP 8.10.1 / Kotlin 2.2.0, compile SDK 35. The older lint engine crashed
+against a transitive lifecycle detector; upgrading resolved it. A build with several resident JVMs
+exhausted host memory. Saved defaults now use one worker, a 1536 MB JVM and in-process Kotlin; the full
+test/coverage/assemble/lint command passes with these defaults. Review also fixed late-arriving ownership
+publication and a disconnected-wallet sign-in crash. Infrastructure deployment and physical-device
+validation remain pending; old manually keyed recordings are not migrated.
 
 ## Online-flow revision
 
@@ -11,12 +34,12 @@ The owner's clarified flow is implemented in the working tree; see `docs/online-
 setup and limits. The historical block table below describes the original baseline, not this revision.
 Added: signed per-segment inclusion records and upload assignments; witness disk queue; persistent
 network-constrained jobs; Bee upload/readback; typed Arkiv create + ownership transfer, transaction
-journaling and entity readback; owner-key setup/import; internet recovery and sequential playback;
-optional Base Sepolia reward pool and verifier/relayer. Native wallet signing keys stay on each device.
+journaling and entity readback; wallet sign-in, delegated recorder proofs and date-sorted discovery; internet recovery and sequential playback;
+optional Base Sepolia reward pool and verifier/relayer. MetaMask wallet keys stay in MetaMask; a trusted key service derives recovery keys and rewraps content keys. See `docs/wallet-recovery.md` and `key-service/README.md` for setup and trust.
 Public Arkiv reads are part of the recovery UI. Offline holder serving is optional future work.
 
 Fresh local checks for this revision: `:core:test :core:koverVerify :app:assembleDebug :app:lintDebug`
-pass on Windows/JDK 17 using Gradle 8.10.2. Core tests include independent ethers ABI/signing fixtures,
+pass on Windows/JDK 17 using Gradle 8.11.1. Core tests include independent ethers ABI/signing fixtures,
 gap-tolerant segment recovery and tampered upload assignments. `rewards/npm test` passes the funded
 local EVM payout/replay/refund test and signed proof/shard/recipient validation test; Solidity compilation
 and Node syntax checks pass. Android lint has zero errors; remaining warnings include prototype UI
@@ -27,7 +50,7 @@ Review fixes: dynamic ABI offsets after multiword static tuples; Android 10 inte
 signed recipient-bound upload assignments; reward retry/duplicate accounting; reward-service downtime
 cannot block subsequent evidence uploads; malformed public index values are filtered before recovery.
 
-No live Bee node/postage batch, funded Rabdi writers, reward deployment, or real-phone run is available
+No Reown project ID, deployed HTTPS key service, live Bee node/postage batch, funded Rabdi writers, reward deployment, or real-phone run is available
 yet. Do not report the integrated flow as device/network verified. Submission evidence remains pending
 in `arkiv/`. Existing compile/test results are updated after the final local checks.
 
@@ -51,7 +74,7 @@ longer lists a macOS-only `fsevents` entry); `npm test` passes 2/2.
 
 | Block | What | State |
 |---|---|---|
-| 0 | Scaffold: Gradle, Kotlin 2.0.21, AGP 8.7.2, Kover 80% gate | Done |
+| 0 | Scaffold: Gradle, Kotlin 2.0.21, AGP 8.10.1, Kover 80% gate | Done |
 | 1 | Core crypto: AES-GCM with chained AAD, HPKE key wrap, RS(5,3), RFC 9162 Merkle, manifest, signed roots | Done, unit-tested |
 | 2 | Android capture: Camera2 -> GL scaler -> H.264 + AAC -> 2 s MP4 -> scrub -> seal into shards | Done, compiles and lints; not run on a phone yet |
 | 3 | Mesh: data-first scheduler, rate control, Nearby P2P_STAR witness and holder mode, ACKs | Done, pure logic unit-tested; Nearby not run on phones yet |

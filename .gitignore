@@ -7,3 +7,4 @@ local.properties
 .env
 .env.*
 node_modules/
+key-service/data/

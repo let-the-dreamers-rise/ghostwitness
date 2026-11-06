@@ -1,8 +1,11 @@
 package xyz.ghostwitness.app
 
 import android.app.Activity
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
+import android.view.View
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -11,110 +14,158 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.VideoView
 import java.util.concurrent.Executors
-import xyz.ghostwitness.app.online.OnlineSettings
-import xyz.ghostwitness.app.online.OnlineStore
-import xyz.ghostwitness.app.online.RecoveryEngine
-import xyz.ghostwitness.app.online.UploadService
-import xyz.ghostwitness.core.crypto.Bytes
+import xyz.ghostwitness.app.online.*
 import xyz.ghostwitness.core.eth.EthKey
 
-/** Setup on each role's phone; recovery keys stay on the owner's recovery device. */
+/** External wallet login, discover the owner's recordings, select one and recover. */
 class OnlineActivity : Activity() {
     private val executor = Executors.newSingleThreadExecutor()
     private lateinit var settings: OnlineSettings
-    private lateinit var status: TextView
-    private lateinit var video: VideoView
     private lateinit var root: LinearLayout
+    private lateinit var recordings: LinearLayout
+    private lateinit var status: TextView
+    private lateinit var ownerStatus: TextView
+    private lateinit var video: VideoView
     private var busy = false
+    private var destroyed = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = OnlineSettings(this)
         root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 24, 24, 24) }
         setContentView(ScrollView(this).apply { addView(root) })
-        label("Recorder → nearby witnesses → Swarm + Arkiv → owner's recovery phone")
-        val rpc = input("Arkiv RPC HTTPS URL", settings.rpc)
-        val bee = input("Bee HTTPS URL", settings.bee)
-        val postage = input("Postage batch ID (uploading witnesses only)", settings.postage)
-        val rewards = input("Reward verifier HTTPS URL (optional until deployed)", settings.rewards)
-        val fee = input("Maximum Arkiv fee per write (GLM)", settings.maxFee)
-        label("Saving upload setup enables gas-paid Arkiv writes from this device's funded writer. Default maximum is 0.01 GLM per write.")
-        val owner = input("Original owner's wallet address", settings.owner)
-        val publicKey = input("Owner's recovery public key (recorder only)", settings.recoveryPublic)
-        val unmetered = CheckBox(this).apply { text = "Upload only on unmetered internet"; isChecked = settings.unmetered }
-        root.addView(unmetered)
-        button("Save setup and schedule uploads") {
-            try {
-                // Validate all fields before committing any setting.
-                listOf(rpc.text.toString(), bee.text.toString(), rewards.text.toString()).filter { it.isNotBlank() }.forEach {
-                    val uri = java.net.URI(it.trim()); require(uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null && uri.fragment == null) { "Use HTTPS URLs" }
-                }
-                require(postage.text.isBlank() || postage.text.toString().matches(Regex("[0-9a-fA-F]{64}"))) { "Postage ID must be 64 hex characters" }
-                require(owner.text.isBlank() || owner.text.toString().matches(Regex("0x[0-9a-fA-F]{40}")) && owner.text.drop(2).any { it != '0' }) { "Enter a wallet address" }
-                require(publicKey.text.isBlank() || publicKey.text.toString().matches(Regex("[0-9a-fA-F]{64}"))) { "Public key must be 64 hex characters" }
-                require(fee.text.toString().toBigDecimal().signum() > 0 && fee.text.toString().toBigDecimal().scale() <= 18) { "Enter a positive fee ceiling" }
-                settings.rpc = rpc.text.toString(); settings.bee = bee.text.toString(); settings.postage = postage.text.toString()
-                settings.owner = owner.text.toString(); settings.recoveryPublic = publicKey.text.toString(); settings.unmetered = unmetered.isChecked
-                settings.rewards = rewards.text.toString()
-                settings.maxFee = fee.text.toString()
-                UploadService.reconfigure(this)
-                status.text = "Saved. Fund the writer address on Rabdi before uploads can be indexed."
-            } catch (error: Exception) { status.text = error.message }
-        }
-        label("This device's Arkiv writer / upload contribution address:\n" + EthKey.checksumless(settings.writer().address))
-        label("Owner recovery key: create on the recovery phone, then copy only its PUBLIC key to the recorder. Keep this phone/key available for recovery.")
-        val ownPublic = label(settings.recovery()?.let { Bytes.toHex(it.publicKey) } ?: "No recovery private key saved")
-        button("Create owner's recovery key on this phone") {
-            try { ownPublic.text = Bytes.toHex(settings.generateRecovery().publicKey); status.text = "Recovery key saved securely on this device" }
-            catch (error: Exception) { status.text = error.message }
-        }
-        val import = input("Restore key backup: public-key-hex:private-key-hex", "", true)
-        button("Import owner's recovery key") {
-            try { settings.importRecovery(import.text.toString()); import.text.clear(); ownPublic.text = Bytes.toHex(settings.recovery()!!.publicKey); status.text = "Recovery key restored" }
-            catch (_: Exception) { status.text = "Invalid backup or a different key is already saved" }
-        }
-        val session = input("Full session code saved from recorder (session ID:signing-key hash)", "")
-        label("Recovery downloads and decrypts on this phone. Recovered MP4s remain in its private app storage.")
-        button("Download and recover from Arkiv + Swarm") {
+        label("GhostWitness · My recordings")
+        label("Connect the same wallet you used on the recorder. Select an uploaded recording to recover it on this device.")
+        ownerStatus = label("")
+        button("Connect MetaMask and sign in") { login() }
+        button("Find my recordings") { findRecordings() }
+        button("Sign out") {
             if (!busy) {
-                busy = true
-                val selectedOwner = owner.text.toString().trim().lowercase()
-                val code = session.text.toString().trim().lowercase()
-                executor.submit {
-                    try {
-                        val result = RecoveryEngine(applicationContext).recover(selectedOwner, code) { message -> runOnUiThread { status.text = message } }
-                        runOnUiThread {
-                            busy = false; status.text = result.report
-                            if (result.files.isNotEmpty()) {
-                                var index = 0
-                                fun play() { video.setVideoPath(result.files[index].absolutePath); video.start() }
-                                video.setOnCompletionListener { if (++index < result.files.size) play() }
-                                video.setOnErrorListener { _, _, _ -> status.append("\nPlayback failed for segment ${result.files[index].name}"); true }
-                                play()
-                            }
-                        }
-                    } catch (error: Exception) {
-                        // RecoveryEngine's own require/error messages and OnlineIssue never carry secrets or URLs.
-                        val reason = if (error is IllegalArgumentException || error is IllegalStateException || error is xyz.ghostwitness.app.online.OnlineIssue) error.message else error.javaClass.simpleName
-                        runOnUiThread { busy = false; status.text = "Recovery failed: $reason. Check setup, original key, session code, network and uploaded shard count." }
-                    }
-                }
+                settings.logoutOwner(); WalletConnection.disconnect(); recordings.removeAllViews()
+                showOwner(); status.text = "Signed out"
             }
         }
-        button("Refresh upload status") {
-            status.text = OnlineStore(filesDir).summary() + "\nLast upload run: " + xyz.ghostwitness.app.online.UploadEngine.status
-            UploadService.schedule(this)
-        }
-        status = label(OnlineStore(filesDir).summary())
+        status = label("")
+        recordings = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; root.addView(this) }
         video = VideoView(this)
         root.addView(video, LinearLayout.LayoutParams(-1, 600))
+        val advanced = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        button("Connection settings") { advanced.visibility = if (advanced.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
+        root.addView(advanced)
+        advanced.visibility = if (settings.keyService.isBlank() || settings.walletProjectId.isBlank()) View.VISIBLE else View.GONE
+        val keyService = input("Wallet key service HTTPS origin", settings.keyService, advanced)
+        val project = input("WalletConnect / Reown project ID", settings.walletProjectId, advanced)
+        val rpc = input("Arkiv RPC HTTPS URL", settings.rpc, advanced)
+        val bee = input("Bee HTTPS URL", settings.bee, advanced)
+        val postage = input("Postage batch ID (receiving witnesses only)", settings.postage, advanced)
+        val rewards = input("Reward verifier HTTPS URL (optional)", settings.rewards, advanced)
+        val fee = input("Maximum Arkiv fee per write (GLM)", settings.maxFee, advanced)
+        val unmetered = CheckBox(this).apply { text = "Upload only on unmetered internet"; isChecked = settings.unmetered; advanced.addView(this) }
+        advanced.addView(TextView(this).apply { text = "The key service is trusted to unlock your recordings after wallet verification. Keep its origin consistent across devices. Receiving witnesses need Bee/postage and a funded Rabdi writer; owner recovery reads do not." })
+        button("Save connection settings", advanced) {
+            if (!busy) try {
+                listOf(rpc.text.toString(), bee.text.toString(), rewards.text.toString(), keyService.text.toString()).filter { it.isNotBlank() }.forEach {
+                    val uri = java.net.URI(it.trim()); require(uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null && uri.fragment == null)
+                }
+                val origin = keyService.text.toString().trim().trimEnd('/')
+                if (origin.isNotBlank()) { val uri = java.net.URI(origin); require(uri.path.isNullOrEmpty() && uri.query == null) }
+                require(project.text.isBlank() || project.text.toString().matches(Regex("[0-9a-fA-F]{32}")))
+                require(postage.text.isBlank() || postage.text.toString().matches(Regex("[0-9a-fA-F]{64}")))
+                require(fee.text.toString().toBigDecimal().signum() > 0 && fee.text.toString().toBigDecimal().scale() <= 18)
+                settings.keyService = origin; settings.walletProjectId = project.text.toString()
+                settings.rpc = rpc.text.toString(); settings.bee = bee.text.toString(); settings.postage = postage.text.toString()
+                settings.rewards = rewards.text.toString(); settings.maxFee = fee.text.toString(); settings.unmetered = unmetered.isChecked
+                UploadService.reconfigure(this)
+                recordings.removeAllViews(); showOwner(); status.text = "Connection settings saved. Connect your wallet to record or recover."
+            } catch (_: Exception) { status.text = "Check HTTPS endpoints, project ID, postage ID and fee ceiling" }
+        }
+        advanced.addView(TextView(this).apply { text = "Witness upload writer: " + EthKey.checksumless(settings.writer().address) })
+        button("Refresh upload status", advanced) { status.text = OnlineStore(filesDir).summary() + "\nLast upload run: " + UploadEngine.status; UploadService.schedule(this) }
+        showOwner()
     }
 
-    private fun label(value: String): TextView = TextView(this).apply { text = value; setTextIsSelectable(true); root.addView(this) }
-    private fun input(hintText: String, value: String, secret: Boolean = false): EditText = EditText(this).apply {
-        hint = hintText; setText(value); inputType = InputType.TYPE_CLASS_TEXT or if (secret) InputType.TYPE_TEXT_VARIATION_PASSWORD else InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        root.addView(this)
+    private fun login() {
+        if (busy) return
+        if (settings.keyService.isBlank() || settings.walletProjectId.isBlank()) { status.text = "Save key service and WalletConnect settings first"; return }
+        busy = true; recordings.removeAllViews(); status.text = "Approve the wallet connection, then sign the GhostWitness authorization. No transaction or private-key export is requested."
+        try {
+            WalletConnection.connect(applicationContext, { uri -> openWallet(uri) }) { owner ->
+                if (owner == null) { finishError("Wallet connection was rejected or timed out"); return@connect }
+                executor.execute {
+                    try {
+                        val keys = WalletKeys(applicationContext)
+                        val challenge = keys.challenge(owner)
+                        postUi {
+                            WalletConnection.sign(challenge.message, owner, { openWallet(null) }) { signature ->
+                                if (signature == null) { finishError("Wallet signature was rejected or timed out"); return@sign }
+                                executor.execute {
+                                    try { keys.login(challenge, signature); postUi { busy = false; showOwner(); status.text = "Signed in. Start recording or find your uploaded recordings." } }
+                                    catch (_: Exception) { finishError("Wallet sign-in failed. Check key service and try again.") }
+                                }
+                            }
+                        }
+                    } catch (_: Exception) { finishError("Could not get a wallet challenge from the key service") }
+                }
+            }
+        } catch (_: Exception) { finishError("Could not initialize wallet connection. Check configuration; restart after changing wallet settings.") }
     }
-    private fun button(title: String, action: () -> Unit) { root.addView(Button(this).apply { text = title; setOnClickListener { action() } }) }
-    override fun onDestroy() { video.stopPlayback(); executor.shutdownNow(); super.onDestroy() }
+
+    private fun findRecordings() {
+        if (busy) return
+        if (settings.walletAuthorization() == null) { status.text = "Connect and sign in with your wallet first"; return }
+        busy = true; recordings.removeAllViews(); status.text = "Finding your recordings on Arkiv…"
+        executor.execute {
+            try {
+                val found = RecoveryEngine(applicationContext).discover()
+                postUi {
+                    busy = false
+                    status.text = if (found.isEmpty()) "No wallet-authorized recordings have been uploaded yet" else "${found.size} recording(s), newest first. Select Recover."
+                    found.forEach { recording ->
+                        val date = java.text.DateFormat.getDateTimeInstance().format(java.util.Date(recording.ownership.header.startWallMs))
+                        button("$date · ${recording.ownership.sessionId.take(8)}\nRecover", recordings) { recover(recording) }
+                    }
+                }
+            } catch (_: Exception) { finishError("Could not load recordings. Check wallet sign-in and Arkiv connection.") }
+        }
+    }
+
+    private fun recover(recording: OwnerRecording) {
+        if (busy) return
+        busy = true; video.stopPlayback()
+        executor.execute {
+            try {
+                val result = RecoveryEngine(applicationContext).recover(recording) { message -> postUi { status.text = message } }
+                postUi {
+                    busy = false; status.text = result.report
+                    if (result.files.isNotEmpty()) {
+                        var index = 0
+                        fun play() { video.setVideoPath(result.files[index].absolutePath); video.start() }
+                        video.setOnCompletionListener { if (++index < result.files.size) play() }
+                        video.setOnErrorListener { _, _, _ -> status.append("\nPlayback failed for segment ${result.files[index].name}"); true }
+                        play()
+                    }
+                }
+            } catch (error: Exception) {
+                val reason = if (error is OnlineIssue) error.message else "Check wallet sign-in, Bee/key-service access and uploaded shard count"
+                finishError("Recovery failed: $reason")
+            }
+        }
+    }
+
+    private fun openWallet(uri: String?) {
+        if (destroyed) return
+        try {
+            val link = if (uri == null) "metamask://" else "https://metamask.app.link/wc?uri=" + Uri.encode(uri)
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)))
+        } catch (_: Exception) { finishError("Install/open MetaMask to approve the wallet request") }
+    }
+    private fun showOwner() { ownerStatus.text = settings.walletAuthorization()?.let { "Wallet: ${it.owner}" } ?: "Not signed in" }
+    private fun finishError(message: String) = postUi { busy = false; status.text = message }
+    private fun postUi(action: () -> Unit) { runOnUiThread { if (!destroyed) action() } }
+    private fun label(value: String): TextView = TextView(this).apply { text = value; setTextIsSelectable(true); root.addView(this) }
+    private fun input(title: String, value: String, parent: LinearLayout): EditText = EditText(this).apply {
+        hint = title; setText(value); inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS; parent.addView(this)
+    }
+    private fun button(title: String, parent: LinearLayout = root, action: () -> Unit) { parent.addView(Button(this).apply { text = title; setOnClickListener { action() } }) }
+    override fun onDestroy() { destroyed = true; WalletConnection.cancelCallbacks(); video.stopPlayback(); executor.shutdownNow(); super.onDestroy() }
 }

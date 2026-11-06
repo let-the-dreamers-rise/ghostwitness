@@ -10,5 +10,6 @@ maintaining that database operator for public discovery and wallet-based ownersh
 uses native Arkiv RPC directly for app reads/writes; the optional reward verifier is still a trusted
 operator for payout decisions and does not make Arkiv a decentralized proof-of-upload system.
 
-Large encrypted shard bytes remain on Swarm; private keys and recovered plaintext remain on devices.
+Large encrypted shard bytes remain on Swarm. Wallet private keys remain in the wallet, recovered
+plaintext stays on the recovery device, and the trusted key service holds derived recovery keys.
 The index exposes session timing, sizes, wallet links and references. See `schema.md` for exact fields.

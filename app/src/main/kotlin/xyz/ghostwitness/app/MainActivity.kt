@@ -220,6 +220,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CapturePipeline.Listene
         try {
             val settings = OnlineSettings(this)
             val recovery = RecoveryKeys.resolve(settings.recoveryPublic.ifBlank { BuildConfig.RECOVERY_PUB_HEX })
+            if (!recovery.testMode && (settings.walletAuthorization()?.validUntil ?: 0) < System.currentTimeMillis()) {
+                state = state.copy(error = "Sign in with your wallet in Online setup before recording")
+                render()
+                return
+            }
             if (!recovery.testMode && settings.owner.isBlank()) {
                 state = state.copy(error = "Set the owner's wallet in Online setup before recording")
                 render()
@@ -235,7 +240,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CapturePipeline.Listene
             if (!autoTier) created.setManualTier(tier)
             pipeline = created
             created.start()
-            state = ViewState(capturing = true, sessionId = created.sessionCode, testMode = recovery.testMode)
+            state = ViewState(capturing = true, sessionId = created.sessionIdHex.take(SESSION_ID_CHARS), testMode = recovery.testMode)
         } catch (e: Exception) {
             pipeline = null
             state = state.copy(error = "could not start: ${e.message}")

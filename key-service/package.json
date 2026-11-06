@@ -1,0 +1,8 @@
+{
+  "name": "ghostwitness-wallet-keys",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "scripts": { "start": "node server.mjs", "test": "node --test test/*.test.mjs" },
+  "dependencies": { "ethers": "6.15.0", "@hpke/core": "1.10.0", "@hpke/dhkem-x25519": "1.8.0" }
+}

@@ -11,7 +11,7 @@ require(recoveryPubHex.matches(Regex("[0-9a-fA-F]*"))) { "gw.recoveryPub must be
 
 android {
     namespace = "xyz.ghostwitness.app"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "xyz.ghostwitness.app"
@@ -47,4 +47,6 @@ kotlin {
 dependencies {
     implementation(project(":core"))
     implementation("com.google.android.gms:play-services-nearby:19.3.0")
+    implementation("com.reown:android-core:1.6.0")
+    implementation("com.reown:sign:1.6.0")
 }
