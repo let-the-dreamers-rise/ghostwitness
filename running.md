@@ -70,6 +70,18 @@ Checks after the audit: `:core:test :core:koverVerify :app:assembleDebug :app:li
 core line coverage 99.43%. `rewards/`: plain `npm ci` now works on Windows and Linux (the lockfile no
 longer lists a macOS-only `fsevents` entry); `npm test` passes 2/2.
 
+Live test setup (2026-11-07, on the developer laptop, outside the repo):
+- Bee 2.8.3 light node on the Swarm Sepolia testnet (network 10) in WSL Docker. Postage sync needs an RPC
+  that serves old logs: the publicnode Sepolia RPC prunes them; `https://sepolia.gateway.tenderly.co` works.
+  Chequebook deployed. WSL shuts idle distros down, which stops Docker, so keep a WSL session open.
+- Phones never see the Bee API directly. A small allow-list proxy only forwards `POST <secret>/bytes` (with
+  the team batch ID, up to 8 MiB) and `GET <secret>/bytes/<ref>`; wallet, stamp and chequebook routes return
+  404. It is published through a Cloudflare quick tunnel (HTTP/2; QUIC dropped). The tunnel hostname changes
+  on restart, so phones must be re-pointed.
+- Rabdi RPC: public endpoint accepts the app's query forms; writers are funded from the Arkiv hub faucet
+  (tGLM). Reward wallets for Base Sepolia are generated into the git-ignored `rewards/.env`.
+- Still pending: sBZZ for the postage batch, funded writers, reward deployment, and the first phone run.
+
 ## Status at a glance
 
 | Block | What | State |
