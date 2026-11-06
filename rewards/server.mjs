@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { Contract, JsonRpcProvider, Wallet, getBytes } from 'ethers';
 import { compile } from './scripts/compile.mjs';
 import { hash, verifyRecord, verifyShard, verifyTicket } from './proof.mjs';
+import { verifyOwnership } from './ownership.mjs';
 
 // Bind behind an HTTPS reverse proxy. No claimant supplies a URL, recipient, amount, or signed tx.
 const env = process.env;
@@ -25,6 +26,24 @@ async function rpc(method, params=[]) {
   return body.result;
 }
 const attrs = entity => Object.fromEntries(entity.attributes.map(a => [a.name,a.value]));
+// A recording's own pool wins. Otherwise the owner's deposit pays, once the owner's wallet-signed session
+// proof on Arkiv names the key that signs this recording (so nobody can bill an owner for a fake session).
+async function terms(owner, sid) {
+  const pool = await contract.pools(await contract.poolId(owner,sid));
+  if (pool.owner.toLowerCase() === owner.toLowerCase() && pool.reward > 0n) return pool;
+  const [reward, balance, maxSegments] = await Promise.all([contract.DEPOSIT_REWARD(), contract.deposits(owner), contract.DEPOSIT_MAX_SEGMENTS()]);
+  if (balance < reward) throw Error('No owner pool or deposit');
+  const query = `app = str('ghostwitness') AND kind = str('session') AND sid = str('${sid.slice(2)}') AND $owner = addr(${owner})`;
+  const page = await rpc('arkiv_query',[query,{select:{key:true,attributes:true},limit:'0x10'}]);
+  for (const session of page.data ?? []) {
+    try {
+      const proof = verifyOwnership(attrs(session).data, owner);
+      if (proof.sid !== sid) continue;
+      return { owner, signingKeyHash: proof.signingKeyHash, reward, balance, expires: BigInt(Number.MAX_SAFE_INTEGER), maxSegments };
+    } catch { /* not a valid proof for this owner; try the next entity */ }
+  }
+  throw Error('No wallet-signed session proof');
+}
 async function verify(entityKey) {
   if (!/^0x[0-9a-f]{64}$/i.test(entityKey)) throw Error('Entity key required');
   const entity = await rpc('arkiv_getEntity',[entityKey]);
@@ -35,8 +54,7 @@ async function verify(entityKey) {
   const height = BigInt(await rpc('eth_blockNumber'));
   if (height - BigInt(entity.createdAt) < 3n) throw Error('Awaiting Arkiv confirmations');
   const sid = '0x'+a.sid;
-  const pool = await contract.pools(await contract.poolId(entity.owner,sid));
-  if (pool.owner.toLowerCase() !== entity.owner.toLowerCase() || pool.reward === 0n) throw Error('No owner pool');
+  const pool = await terms(entity.owner, sid);
   const index=Number(BigInt(a.i)), j=Number(BigInt(a.j));
   if (!Number.isSafeInteger(index) || index < 0 || index >= Number(pool.maxSegments) || !Number.isInteger(j) || j < 0 || j > 4) throw Error('Invalid contribution index');
   const id = await contract.claimId(entity.owner,sid,index,j);

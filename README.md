@@ -122,7 +122,7 @@ Run on real Android phones during the event: a recorder, receiving witnesses and
 | Owner wallet of every entity | `0xc89363f084f5a16433d50d5958a40b747ff9a395` |
 | Arkiv network | Rabdi testnet, chain 7794095, [explorer](https://rabdi.explorer.arkiv.network) |
 | Swarm | Bee 2.8.3 light node on the Swarm Sepolia testnet, postage batch `6cb6a8661a2171c5294f4d059c5ca246ed40937dbfa1a6c5f0c473b455a89b21` |
-| Upload rewards contract | `0x8ea0AC50532B5F35a2bd9CC325144474C171888F` on Base Sepolia ([basescan](https://sepolia.basescan.org/address/0x8ea0AC50532B5F35a2bd9CC325144474C171888F)) |
+| Upload rewards contract | `0xD7C12766f98884BffE36D55D8c418E9b043A2ADF` on Base Sepolia ([basescan](https://sepolia.basescan.org/address/0xD7C12766f98884BffE36D55D8c418E9b043A2ADF)). To fund rewards, the owner sends ETH to it from their wallet; each verified shard of any of their recordings pays 0.00002 ETH from that deposit, and `withdraw` returns the rest at any time |
 
 One query you can run (lists the uploaded shards indexed for the demo owner):
 

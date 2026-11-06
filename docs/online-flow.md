@@ -39,14 +39,17 @@ npm test
 npm run compile
 # Set DEPLOYER_KEY, VERIFIER_ADDRESS, REWARD_RPC, REWARD_CHAIN_ID locally.
 npm run deploy
-# Save REWARD_CONTRACT from deployment. On the owner's machine, set OWNER_KEY,
+# Save REWARD_CONTRACT from deployment. Simplest funding: the owner sends ETH to
+# REWARD_CONTRACT from their wallet (a plain transfer). It pays 0.00002 ETH per
+# verified shard of any recording they own; withdraw(amount) returns the rest.
+# Optional per-recording pool with its own reward and expiry: set OWNER_KEY,
 # SESSION_CODE, POOL_ETH, REWARD_ETH and optionally MAX_SEGMENTS/POOL_SECONDS.
 node scripts/fund.mjs
 # Set VERIFIER_KEY, REWARD_CONTRACT, ARKIV_RPC, BEE_URL and reward RPC locally.
 npm run serve
 ```
 
-The service binds loopback port 8787. Expose `/claim` through an HTTPS reverse proxy with request/rate limits. Set its base URL in witness setup. POST body: `{"entityKey":"0x..."}`. The service reads all URLs from operator configuration; callers cannot select a fetch URL, recipient or reward amount. App journals distinguish pending from verifier-confirmed paid claims. A lost response is retried against the contract's one-time claim state. Verifier payouts require network RPCs, a funded pool and relay gas. No deployment, pool funding, or live payout was performed as part of implementation. The contract and verifier are a demo implementation, not an audited deployment.
+The service binds loopback port 8787. Expose `/claim` through an HTTPS reverse proxy with request/rate limits. Set its base URL in witness setup. POST body: `{"entityKey":"0x..."}`. The service reads all URLs from operator configuration; callers cannot select a fetch URL, recipient or reward amount. App journals distinguish pending from verifier-confirmed paid claims. A lost response is retried against the contract's one-time claim state. Verifier payouts require network RPCs, a funded pool or owner deposit, and relay gas. For deposit-funded claims the verifier accepts a recording only if its Arkiv session entity carries a valid wallet-signed ownership proof (`rewards/ownership.mjs`), so nobody can bill an owner for a session they did not record. The contract and verifier are a demo implementation, not an audited deployment.
 
 ## Current external setup and validation
 

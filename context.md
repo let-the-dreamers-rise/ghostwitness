@@ -102,7 +102,7 @@ Queries use typed predicates, constrained owner/session/kind, bounded keyset pag
 
 `rewards/server.mjs` is a trusted verifier/relayer. It checks Arkiv creator/ownership/confirmations, authenticated metadata, actual Bee readback, shard commitments and signed recipient assignment before authorizing and relaying payment. Request URLs/amounts/recipients cannot be caller-selected. It binds loopback behind an HTTPS/rate-limited proxy. A copied reference alone is insufficient. Reassigned duplicates compete for one reward slot. This is not decentralized proof of permanent custody.
 
-Deploy with `scripts/deploy.mjs`, fund from the original owner's machine using `scripts/fund.mjs`, then start the verifier and configure its URL on witness devices. No contract deployment, wallet funding, live upload or payout was executed during implementation. Base reward support does not imply event bounty eligibility.
+Deploy with `scripts/deploy.mjs`. Fund by sending ETH to the contract from the owner's wallet (an owner deposit that pays for every recording they own; the verifier checks the session's wallet-signed ownership proof on Arkiv), or per recording with `scripts/fund.mjs`; then start the verifier and configure its URL on witness devices. No contract deployment, wallet funding, live upload or payout was executed during implementation. Base reward support does not imply event bounty eligibility.
 
 ## Thread ownership
 
