@@ -17,6 +17,9 @@ import xyz.ghostwitness.app.capture.gl.CameraRenderer
 import xyz.ghostwitness.app.mesh.MeshStatus
 import xyz.ghostwitness.app.mesh.WitnessMeshDriver
 import xyz.ghostwitness.app.store.SessionStore
+import xyz.ghostwitness.app.online.OnlineSettings
+import xyz.ghostwitness.core.recovery.RecoveryRecord
+import xyz.ghostwitness.core.merkle.Merkle
 import xyz.ghostwitness.core.capture.Tier
 import xyz.ghostwitness.core.crypto.Bytes
 import xyz.ghostwitness.core.crypto.SessionSecrets
@@ -71,7 +74,9 @@ class CapturePipeline(
     /** Touched only on the sealer thread once [start] has been called. */
     private var session: RecordingSession = newSession(recovery.publicKey)
     private val store = SessionStore(context.applicationContext.filesDir, session.header)
+    private val owner = OnlineSettings(context).owner.takeIf { it.isNotBlank() }?.let { Bytes.fromHex(it.removePrefix("0x")) }
     val sessionIdHex: String = Bytes.toHex(session.header.sessionId)
+    val sessionCode: String = sessionIdHex + ":" + Bytes.toHex(Bytes.sha256(session.header.sessionPublicKey))
 
     private val videoListener: VideoEncoder.Listener = object : VideoEncoder.Listener {
         override fun onVideoFormat(generation: Int, format: MediaFormat) = muxer.onVideoFormat(generation, format)
@@ -125,7 +130,7 @@ class CapturePipeline(
         }
     }
     private val meshDriver: WitnessMeshDriver =
-        WitnessMeshDriver(context, session.header, store, startTier, spec.tiers, meshListener)
+        WitnessMeshDriver(context, session.header, store, startTier, spec.tiers, meshListener, session::authorizeUpload)
 
     fun start() {
         meshDriver.start()
@@ -205,7 +210,9 @@ class CapturePipeline(
             val appended = session.append(tStartMs, durMs, clean)
             session = appended.session
             store.writeSegment(appended.segment, appended.root)
-            meshDriver.onSealed(appended)
+            val record = owner?.let { RecoveryRecord(session.header, it, appended.segment.entry, appended.root,
+                Merkle.proof(appended.segment.entry.index, session.entries.map { entry -> entry.leafHash() })) }
+            meshDriver.onSealed(appended, record)
             val check = debugDir?.let { selfCheck(appended, clean, it) }
             val entry = appended.segment.entry
             val report = SegmentReport(entry.index, durMs, entry.ctLen, plain.withVideo, check)

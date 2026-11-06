@@ -9,6 +9,7 @@ import xyz.ghostwitness.core.crypto.SessionSigner
 import xyz.ghostwitness.core.manifest.ManifestEntry
 import xyz.ghostwitness.core.manifest.SignedRoot
 import xyz.ghostwitness.core.rs.ReedSolomon
+import xyz.ghostwitness.core.recovery.UploadTicket
 
 /** Result of sealing one segment: the next session state, the shards to spread and the new signed root. */
 class SegmentAppended(val session: RecordingSession, val segment: EncodedSegment, val root: SignedRoot)
@@ -38,6 +39,9 @@ class RecordingSession private constructor(
     fun open(entry: ManifestEntry, shards: Map<Int, ByteArray>): ByteArray = codec.decode(entry, shards)
 
     fun close() = codec.wipe()
+
+    fun authorizeUpload(index: Int, shard: Int, uploader: ByteArray, shardHash: ByteArray): UploadTicket =
+        UploadTicket.create(header.sessionId, index, shard, uploader, shardHash, signer)
 
     companion object {
         fun start(

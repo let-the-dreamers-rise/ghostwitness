@@ -5,6 +5,32 @@ What is built, what is verified, and what is left. Updated as work lands. The de
 
 Last updated: 2026-11-06.
 
+## Online-flow revision
+
+The owner's clarified flow is implemented in the working tree; see `docs/online-flow.md` for current
+setup and limits. The historical block table below describes the original baseline, not this revision.
+Added: signed per-segment inclusion records and upload assignments; witness disk queue; persistent
+network-constrained jobs; Bee upload/readback; typed Arkiv create + ownership transfer, transaction
+journaling and entity readback; owner-key setup/import; internet recovery and sequential playback;
+optional Base Sepolia reward pool and verifier/relayer. Native wallet signing keys stay on each device.
+Public Arkiv reads are part of the recovery UI. Offline holder serving is optional future work.
+
+Fresh local checks for this revision: `:core:test :core:koverVerify :app:assembleDebug :app:lintDebug`
+pass on Windows/JDK 17 using Gradle 8.10.2. Core tests include independent ethers ABI/signing fixtures,
+gap-tolerant segment recovery and tampered upload assignments. `rewards/npm test` passes the funded
+local EVM payout/replay/refund test and signed proof/shard/recipient validation test; Solidity compilation
+and Node syntax checks pass. Android lint has zero errors; remaining warnings include prototype UI
+localization, target/dependency versions and synchronous preference persistence. Device/network results
+are still pending.
+
+Review fixes: dynamic ABI offsets after multiword static tuples; Android 10 integer API compatibility;
+signed recipient-bound upload assignments; reward retry/duplicate accounting; reward-service downtime
+cannot block subsequent evidence uploads; malformed public index values are filtered before recovery.
+
+No live Bee node/postage batch, funded Rabdi writers, reward deployment, or real-phone run is available
+yet. Do not report the integrated flow as device/network verified. Submission evidence remains pending
+in `arkiv/`. Existing compile/test results are updated after the final local checks.
+
 ## Status at a glance
 
 | Block | What | State |

@@ -22,6 +22,8 @@ import xyz.ghostwitness.core.session.SegmentAppended
 import xyz.ghostwitness.core.session.SessionHeader
 import xyz.ghostwitness.core.wire.FrameFormatException
 import xyz.ghostwitness.core.wire.ShardHeader
+import xyz.ghostwitness.core.recovery.RecoveryRecord
+import xyz.ghostwitness.core.recovery.UploadTicket
 
 /** What the record screen shows about the mesh. */
 data class MeshStatus(
@@ -54,6 +56,7 @@ class WitnessMeshDriver(
     initialTier: Tier,
     ladder: List<Tier>,
     private val listener: Listener,
+    private val authorizeUpload: (Int, Int, ByteArray, ByteArray) -> UploadTicket,
 ) {
     interface Listener {
         fun onMeshStatus(status: MeshStatus)
@@ -69,6 +72,8 @@ class WitnessMeshDriver(
     private var lastError: String? = null
     private var lastStatusMs = 0L
     private var stopped = false
+    private val records = mutableMapOf<Int, RecoveryRecord>()
+    private val writers = mutableMapOf<String, ByteArray>()
 
     /** Holder name to its current endpoint, and back. Handler thread only. */
     private var endpointOf: Map<String, String> = emptyMap()
@@ -98,6 +103,10 @@ class WitnessMeshDriver(
 
         override fun onBytes(endpointId: String, bytes: ByteArray) {
             val holder = holderOf[endpointId] ?: return
+            if (bytes.size == 40 && String(bytes, 0, 4, Charsets.US_ASCII) == "GWI1" && bytes.copyOfRange(4, 20).contentEquals(header.sessionId)) {
+                writers[holder] = bytes.copyOfRange(20, 40)
+                return
+            }
             val frame = try {
                 ControlCodec.decode(bytes)
             } catch (e: FrameFormatException) {
@@ -127,11 +136,16 @@ class WitnessMeshDriver(
     }
 
     /** Called on the sealer thread for every sealed segment. */
-    fun onSealed(appended: SegmentAppended) {
+    fun onSealed(appended: SegmentAppended, record: RecoveryRecord? = null) {
         val hashes = shardHashes(appended.segment.shards)
         val entry = appended.segment.entry
         val root = appended.root
-        handler.post { if (!stopped) applyStep(mesh.onSegment(state, entry, root, hashes)) }
+        handler.post {
+            if (!stopped) {
+                if (record != null) records[entry.index] = record
+                applyStep(mesh.onSegment(state, entry, root, hashes))
+            }
+        }
     }
 
     fun stop() {
@@ -168,9 +182,14 @@ class WitnessMeshDriver(
     private fun sendShard(command: MeshCommand.SendShard) {
         val entry = state.entries[command.segmentIndex] ?: return
         val endpoint = endpointOf[command.peerId] ?: return
+        val writer = writers[command.peerId] ?: return
         val file = store.shardFile(command.segmentIndex, command.shardIndex)
         val shardLen = file.length().toInt()
         val shardRoot = entry.shardRoots[command.shardIndex]
+        // Repeat on every shard/retry: a witness needs its own signed proof even if other entries are absent.
+        records[command.segmentIndex]?.let { link.sendBytes(endpoint, it.encode()) }
+        val ticket = authorizeUpload(command.segmentIndex, command.shardIndex, writer, state.shardHashes.getValue(command.segmentIndex)[command.shardIndex])
+        link.sendBytes(endpoint, ticket.encode())
         link.sendFile(endpoint, file) { payloadId ->
             ShardHeader(
                 sessionId = header.sessionId,

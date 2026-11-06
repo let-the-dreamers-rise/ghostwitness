@@ -22,6 +22,7 @@ import xyz.ghostwitness.app.capture.CapturePipeline
 import xyz.ghostwitness.app.capture.SegmentReport
 import xyz.ghostwitness.app.mesh.MeshStatus
 import xyz.ghostwitness.core.capture.Tier
+import xyz.ghostwitness.app.online.OnlineSettings
 
 /**
  * Record screen: preview, start/stop, tier (Auto follows the rate controller), mesh status and the
@@ -132,6 +133,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CapturePipeline.Listene
         }
         root.addView(banner, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         status = TextView(this).apply {
+            setTextIsSelectable(true)
             setTextColor(Color.WHITE)
             typeface = Typeface.MONOSPACE
             setPadding(PADDING, PADDING / 2, PADDING, PADDING / 2)
@@ -141,10 +143,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CapturePipeline.Listene
         root.addView(recordButton)
         root.addView(buildTierRow())
         holderButton = Button(this).apply {
-            text = "Hold shards for someone else"
+            text = "Witness: receive and upload shards"
             setOnClickListener { startActivity(Intent(this@MainActivity, HolderActivity::class.java)) }
         }
         root.addView(holderButton)
+        root.addView(Button(this).apply {
+            text = "Online setup and owner recovery"
+            setOnClickListener { startActivity(Intent(this@MainActivity, OnlineActivity::class.java)) }
+        })
         if (BuildConfig.DEBUG) {
             val toggle = CheckBox(this).apply {
                 text = "Debug: save a playable copy of each segment"
@@ -212,7 +218,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CapturePipeline.Listene
         }
         shutdownPipeline()
         try {
-            val recovery = RecoveryKeys.resolve(BuildConfig.RECOVERY_PUB_HEX)
+            val settings = OnlineSettings(this)
+            val recovery = RecoveryKeys.resolve(settings.recoveryPublic.ifBlank { BuildConfig.RECOVERY_PUB_HEX })
+            if (!recovery.testMode && settings.owner.isBlank()) {
+                state = state.copy(error = "Set the owner's wallet in Online setup before recording")
+                render()
+                return
+            }
             if (recovery.testMode && !BuildConfig.DEBUG) {
                 state = state.copy(error = "set a recovery key first: without it nothing can be recovered")
                 render()
@@ -223,7 +235,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, CapturePipeline.Listene
             if (!autoTier) created.setManualTier(tier)
             pipeline = created
             created.start()
-            state = ViewState(capturing = true, sessionId = created.sessionIdHex.take(SESSION_ID_CHARS), testMode = recovery.testMode)
+            state = ViewState(capturing = true, sessionId = created.sessionCode, testMode = recovery.testMode)
         } catch (e: Exception) {
             pipeline = null
             state = state.copy(error = "could not start: ${e.message}")

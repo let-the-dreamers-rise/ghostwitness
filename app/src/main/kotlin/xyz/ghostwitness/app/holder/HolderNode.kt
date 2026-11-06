@@ -17,6 +17,12 @@ import xyz.ghostwitness.core.mesh.HolderState
 import xyz.ghostwitness.core.mesh.HolderStep
 import xyz.ghostwitness.core.mesh.LinkQuality
 import xyz.ghostwitness.core.wire.FrameFormatException
+import xyz.ghostwitness.app.online.OnlineStore
+import xyz.ghostwitness.app.online.UploadService
+import xyz.ghostwitness.core.recovery.RecoveryRecord
+import xyz.ghostwitness.core.recovery.UploadTicket
+import xyz.ghostwitness.app.online.OnlineSettings
+import java.io.File
 
 data class HolderStatus(
     val connected: Boolean,
@@ -35,6 +41,7 @@ data class HolderStatus(
  * the main thread.
  */
 class HolderNode(context: Context, private val listener: Listener) {
+    private val appContext = context.applicationContext
     interface Listener {
         fun onHolderStatus(status: HolderStatus)
     }
@@ -72,6 +79,28 @@ class HolderNode(context: Context, private val listener: Listener) {
         }
 
         override fun onBytes(endpointId: String, bytes: ByteArray) {
+            if (endpointId != witness) return
+            if (bytes.size == 141 && String(bytes, 0, 3, Charsets.US_ASCII) == "GWT") {
+                try {
+                    val ticket = UploadTicket.decode(bytes)
+                    require(ticket.uploader.contentEquals(OnlineSettings(appContext).writer().address))
+                    val sid = Bytes.toHex(ticket.sessionId)
+                    require(state.header?.sessionId?.contentEquals(ticket.sessionId) == true)
+                    OnlineStore.atomic(File(appContext.filesDir, "holdings/$sid/tickets/${ticket.index}-${ticket.shard}.bin"), ticket.encode())
+                    UploadService.schedule(appContext)
+                } catch (_: Exception) { rejected++; lastProblem = "Could not save upload assignment" }
+                return
+            }
+            if (bytes.size >= 3 && String(bytes, 0, 3, Charsets.US_ASCII) == "GWP") {
+                try {
+                    val record = RecoveryRecord.decode(bytes)
+                    val header = state.header ?: throw IllegalArgumentException("Session header required")
+                    require(record.header.encode().contentEquals(header.encode())) { "Wrong session proof" }
+                    OnlineStore(appContext.filesDir).saveRecord(record)
+                    UploadService.schedule(appContext)
+                } catch (_: Exception) { rejected++; lastProblem = "Could not validate or save segment proof" }
+                return
+            }
             val frame = try {
                 ControlCodec.decode(bytes)
             } catch (e: FrameFormatException) {
@@ -80,16 +109,21 @@ class HolderNode(context: Context, private val listener: Listener) {
                 return
             }
             applyStep(ledger.onControl(state, frame))
+            if (frame is xyz.ghostwitness.core.mesh.ControlFrame.Session) {
+                link.sendBytes(endpointId, Bytes.concat("GWI1".toByteArray(), frame.header.sessionId, OnlineSettings(appContext).writer().address))
+            }
         }
 
-        override fun onFile(endpointId: String, payloadId: Long, bytes: ByteArray) = applyStep(ledger.onBody(state, payloadId, bytes))
+        override fun onFile(endpointId: String, payloadId: Long, bytes: ByteArray) {
+            if (endpointId == witness) applyStep(ledger.onBody(state, payloadId, bytes))
+        }
 
         override fun onLinkError(message: String) {
             lastProblem = message
         }
     }
 
-    private val link = NearbyLink(context.applicationContext, handler, events)
+    private val link: NearbyLink = NearbyLink(context.applicationContext, handler, events)
 
     fun start() {
         handler.post {
@@ -117,6 +151,7 @@ class HolderNode(context: Context, private val listener: Listener) {
                 }
                 else -> try {
                     store.persist(action, acc.header)
+                    if (action is HolderAction.StoreShard) UploadService.schedule(appContext)
                     acc
                 } catch (e: IOException) {
                     lastProblem = "storage: ${e.message}"

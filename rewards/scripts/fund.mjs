@@ -1,0 +1,14 @@
+import { Contract, JsonRpcProvider, Wallet, parseEther } from 'ethers';
+import { compile } from './compile.mjs';
+const env=process.env;
+for (const name of ['OWNER_KEY','REWARD_CONTRACT','SESSION_CODE','POOL_ETH','REWARD_ETH']) if(!env[name]) throw Error(`Set ${name}`);
+if(!/^[0-9a-f]{32}:[0-9a-f]{64}$/.test(env.SESSION_CODE)) throw Error('Invalid recorder session code');
+const provider=new JsonRpcProvider(env.REWARD_RPC??'https://sepolia.base.org');
+if((await provider.getNetwork()).chainId!==BigInt(env.REWARD_CHAIN_ID??'84532')) throw Error('Wrong reward chain');
+const wallet=new Wallet(env.OWNER_KEY,provider);
+const contract=new Contract(env.REWARD_CONTRACT,(await compile()).abi,wallet);
+const [sid,keyHash]=env.SESSION_CODE.split(':');
+const now=(await provider.getBlock('latest')).timestamp;
+const tx=await contract.fund('0x'+sid,'0x'+keyHash,parseEther(env.REWARD_ETH),now+Number(env.POOL_SECONDS??'2592000'),Number(env.MAX_SEGMENTS??'1800'),{value:parseEther(env.POOL_ETH)});
+await tx.wait(2);
+console.log('Funded session',sid,'transaction',tx.hash);

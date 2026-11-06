@@ -10,6 +10,9 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import xyz.ghostwitness.app.holder.HolderNode
 import xyz.ghostwitness.app.holder.HolderStatus
+import xyz.ghostwitness.app.online.OnlineStore
+import xyz.ghostwitness.app.online.UploadEngine
+import xyz.ghostwitness.app.online.UploadService
 
 /** Holder screen: keeps shards for a nearby recording phone. Runs until the screen is closed. */
 class HolderActivity : Activity(), HolderNode.Listener {
@@ -35,6 +38,7 @@ class HolderActivity : Activity(), HolderNode.Listener {
         root.addView(button)
         root.addView(text)
         setContentView(root)
+        UploadService.schedule(this)
         val missing = Permissions.missing(this, Permissions.mesh)
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), REQUEST_PERMISSIONS)
         render()
@@ -94,7 +98,8 @@ class HolderActivity : Activity(), HolderNode.Listener {
             if (missing.isNotEmpty()) add("Nearby permissions needed: ${missing.joinToString { it.substringAfterLast('.') }}")
             error?.let { add("Error: $it") }
             add("")
-            add("Everything kept here is encrypted. This phone cannot play it.")
+            add("Encrypted shards upload automatically on suitable internet, including after this screen closes.")
+            add(UploadEngine.status)
         }
         text.text = lines.joinToString("\n")
         button.text = if (node == null) "Start holding" else "Stop holding"

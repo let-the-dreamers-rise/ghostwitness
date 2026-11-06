@@ -65,7 +65,7 @@ const val ADDRESS_BYTES = 20
 object Abi {
     fun encode(values: List<AbiValue>): ByteArray {
         val heads = values.map { if (it.isDynamic) null else encodeStatic(it) }
-        val headSize = values.size * AbiValue.WORD
+        val headSize = heads.sumOf { it?.size ?: AbiValue.WORD }
         val tails = values.map { if (it.isDynamic) encodeDynamic(it) else ByteArray(0) }
         val (headParts, _) = values.indices.fold(emptyList<ByteArray>() to headSize) { (acc, offset), i ->
             val head = heads[i] ?: word(BigInteger.valueOf(offset.toLong()))

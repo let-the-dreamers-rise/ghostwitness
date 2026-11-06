@@ -1,5 +1,11 @@
 # GhostWitness: Engineering Spec v2.1
 
+> Implementation update (2026-11-06): [online-flow.md](online-flow.md) supersedes this document's
+> offline-first recovery priority and exclusion of rewards. Product terminology is recorder -> nearby
+> witnesses; source `WitnessMesh` means recorder and `HolderNode` means receiving witness. The revised
+> implementation adds background Swarm/Arkiv uploads, online owner recovery and optional verified upload
+> rewards. Historical acceptance claims below are not fresh live-device or live-network evidence.
+
 Event: ETHGlobal Mumbai 2026. Partner picks: **EF CROPS and Arkiv (Build from scratch + Arkiv/Swarm
 bonus)**. Arc and World are not targeted. This replaces `Downloads/GHOSTWITNESS-SPEC.md`, which is left
 unchanged for reference.
